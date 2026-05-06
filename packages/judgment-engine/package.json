@@ -20,6 +20,15 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/delacunaworks/fresh-chat-keeper.git",
+    "directory": "packages/judgment-engine"
+  },
+  "bugs": {
+    "url": "https://github.com/delacunaworks/fresh-chat-keeper/issues"
+  },
+  "homepage": "https://github.com/delacunaworks/fresh-chat-keeper#readme",
   "dependencies": {
     "@fresh-chat-keeper/knowledge-base": "workspace:*",
     "@fresh-chat-keeper/shared": "workspace:*"

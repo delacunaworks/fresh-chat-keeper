@@ -16,6 +16,14 @@
     "validate": "node --input-type=module < scripts/validate.mjs",
     "test": "vitest run"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/delacunaworks/fresh-chat-keeper.git"
+  },
+  "bugs": {
+    "url": "https://github.com/delacunaworks/fresh-chat-keeper/issues"
+  },
+  "homepage": "https://github.com/delacunaworks/fresh-chat-keeper#readme",
   "dependencies": {
     "@fresh-chat-keeper/shared": "workspace:*"
   },

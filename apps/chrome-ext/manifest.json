@@ -3,6 +3,7 @@
   "name": "Fresh Chat Keeper",
   "version": "0.3.0",
   "description": "ゲーム配信のチャットからネタバレをフィルタします",
+  "homepage_url": "https://github.com/delacunaworks/fresh-chat-keeper",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",

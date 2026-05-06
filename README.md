@@ -62,7 +62,7 @@ Filtering is handled in two stages: instant keyword matching for obvious spoiler
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/delacuna/fresh-chat-keeper.git
+git clone https://github.com/delacunaworks/fresh-chat-keeper.git
 cd fresh-chat-keeper
 
 # 2. Install dependencies
@@ -94,7 +94,7 @@ pnpm build
 - **No API key needed**: Fresh Chat Keeper manages API access through a secure proxy
 - **No account required**: Install and use immediately
 
-[Full Privacy Policy](https://github.com/delacuna/fresh-chat-keeper/blob/main/docs/privacy-policy.md)
+[Full Privacy Policy](https://github.com/delacunaworks/fresh-chat-keeper/blob/main/docs/privacy-policy.md)
 
 ---
 
@@ -141,10 +141,10 @@ Configure the proxy URL in the extension popup under the settings if needed.
 
 ## License
 
-[MIT](LICENSE) © 2026 delacuna
+[MIT](LICENSE) © 2026 delacunaworks
 
 ---
 
 ## Issues & Feedback
 
-Please report bugs or feature requests via [GitHub Issues](https://github.com/delacuna/fresh-chat-keeper/issues).
+Please report bugs or feature requests via [GitHub Issues](https://github.com/delacunaworks/fresh-chat-keeper/issues).
