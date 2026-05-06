@@ -65,7 +65,7 @@
 - **APIキー不要**: Anthropic APIキーをユーザーが用意する必要はありません。Fresh Chat Keeperが安全なプロキシ経由で管理しています
 - **アカウント登録不要**: インストールするだけで即使用可能
 
-詳しいプライバシーポリシー: https://github.com/delacuna/fresh-chat-keeper/blob/main/docs/privacy-policy.md
+詳しいプライバシーポリシー: https://github.com/delacunaworks/fresh-chat-keeper/blob/main/docs/privacy-policy.md
 
 
 ### ご利用にあたって
@@ -81,4 +81,4 @@ AIが文脈を読んでネタバレを判定しますが、すべてのケース
 ### ソースコード
 
 オープンソースで公開しています:
-https://github.com/delacuna/fresh-chat-keeper
+https://github.com/delacunaworks/fresh-chat-keeper

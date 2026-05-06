@@ -65,7 +65,7 @@ Settings apply instantly. Fresh Chat Keeper works automatically from that point 
 - **No API key needed**: Fresh Chat Keeper manages API access through a secure proxy — you don't need to provide any keys
 - **No account required**: Install and use immediately, no sign-up needed
 
-Full privacy policy: https://github.com/delacuna/fresh-chat-keeper/blob/main/docs/privacy-policy.md
+Full privacy policy: https://github.com/delacunaworks/fresh-chat-keeper/blob/main/docs/privacy-policy.md
 
 
 ### A Note on Accuracy
@@ -81,4 +81,4 @@ Fresh Chat Keeper uses AI to understand context, but cannot guarantee every spoi
 ### Source Code
 
 Fresh Chat Keeper is open source:
-https://github.com/delacuna/fresh-chat-keeper
+https://github.com/delacunaworks/fresh-chat-keeper

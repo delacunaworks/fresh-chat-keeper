@@ -62,7 +62,7 @@ Fresh Chat Keeper は、YouTubeのゲーム配信（ライブ・アーカイブ�
 
 ```bash
 # 1. リポジトリをクローン
-git clone https://github.com/delacuna/fresh-chat-keeper.git
+git clone https://github.com/delacunaworks/fresh-chat-keeper.git
 cd fresh-chat-keeper
 
 # 2. 依存パッケージをインストール
@@ -94,7 +94,7 @@ pnpm build
 - **APIキー不要**: Anthropic APIキーをユーザーが用意する必要はありません。Fresh Chat Keeper が安全なプロキシ経由で管理しています
 - **アカウント登録不要**: インストールするだけで即使用可能
 
-[プライバシーポリシー（詳細）](https://github.com/delacuna/fresh-chat-keeper/blob/main/docs/privacy-policy.md)
+[プライバシーポリシー（詳細）](https://github.com/delacunaworks/fresh-chat-keeper/blob/main/docs/privacy-policy.md)
 
 ---
 
@@ -141,10 +141,10 @@ pnpm wrangler dev   # http://localhost:8787 でローカルプロキシが起動
 
 ## ライセンス
 
-[MIT](LICENSE) © 2026 delacuna
+[MIT](LICENSE) © 2026 delacunaworks
 
 ---
 
 ## 問い合わせ・バグ報告
 
-[GitHub Issues](https://github.com/delacuna/fresh-chat-keeper/issues) からお気軽にお問い合わせください。
+[GitHub Issues](https://github.com/delacunaworks/fresh-chat-keeper/issues) からお気軽にお問い合わせください。

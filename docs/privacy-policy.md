@@ -54,7 +54,7 @@ Fresh Chat Keeper はユーザーデータを第三者に販売・共有する�
 
 ### 問い合わせ
 
-ご質問は [GitHub リポジトリの Issues](https://github.com/delacuna/fresh-chat-keeper/issues) または [delacunaworks@gmail.com](mailto:delacunaworks@gmail.com) までお問い合わせください。
+ご質問は [GitHub リポジトリの Issues](https://github.com/delacunaworks/fresh-chat-keeper/issues) または [delacunaworks@gmail.com](mailto:delacunaworks@gmail.com) までお問い合わせください。
 
 ---
 
@@ -107,4 +107,4 @@ Fresh Chat Keeper does not sell or share user data with any third parties.
 
 ### Contact
 
-For questions, please open an issue on the [GitHub repository](https://github.com/delacuna/fresh-chat-keeper/issues) or contact us at [delacunaworks@gmail.com](mailto:delacunaworks@gmail.com).
+For questions, please open an issue on the [GitHub repository](https://github.com/delacunaworks/fresh-chat-keeper/issues) or contact us at [delacunaworks@gmail.com](mailto:delacunaworks@gmail.com).
