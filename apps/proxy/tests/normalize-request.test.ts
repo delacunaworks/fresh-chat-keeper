@@ -5,7 +5,7 @@
  * Anthropic API への実通信は別レイヤーなので、ここでは純粋な正規化ロジックのみを検証。
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import workerModule from '../src/index.js';
 import { __test__ } from '../src/index.js';
 
@@ -18,6 +18,7 @@ const {
   buildGenreTemplateField,
   uncertainVerdict,
   categoryToVerdict,
+  checkRateLimit,
 } = __test__;
 
 // default export が壊れていないことの軽い確認
@@ -328,6 +329,72 @@ describe('normalizeRequest', () => {
       });
       expect(result.legacyFilterMode).toBe('lenient');
     });
+  });
+});
+
+describe('checkRateLimit (HARD-01: KV 障害時 fail-open)', () => {
+  function createMockKV(overrides?: Partial<{ get: () => Promise<string | null>; put: () => Promise<void> }>): unknown {
+    const store = new Map<string, string>();
+    return {
+      async get(key: string) {
+        if (overrides?.get) return overrides.get();
+        return store.get(key) ?? null;
+      },
+      async put(key: string, value: string) {
+        if (overrides?.put) return overrides.put();
+        store.set(key, value);
+      },
+    };
+  }
+
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  it('正常系: KV から count を取得して制限内なら true', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await checkRateLimit('1.2.3.4', createMockKV() as any);
+    expect(result).toBe(true);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('上限超過時は false', async () => {
+    const kv = createMockKV({
+      get: async () => '99', // RATE_LIMIT_MAX (30) を超えた値
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await checkRateLimit('1.2.3.4', kv as any);
+    expect(result).toBe(false);
+  });
+
+  it('KV.get が throw しても fail-open で true を返し、warn ログを出す', async () => {
+    const kv = createMockKV({
+      get: async () => {
+        throw new Error('KV connection failed');
+      },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await checkRateLimit('1.2.3.4', kv as any);
+    expect(result).toBe(true);
+    expect(warnSpy).toHaveBeenCalledOnce();
+    expect(warnSpy.mock.calls[0]?.[0]).toContain('failing open');
+    expect(warnSpy.mock.calls[0]?.[0]).toContain('KV connection failed');
+  });
+
+  it('KV.put が throw しても fail-open で true を返す', async () => {
+    const kv = createMockKV({
+      put: async () => {
+        throw new Error('KV write failed');
+      },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await checkRateLimit('1.2.3.4', kv as any);
+    expect(result).toBe(true);
+    expect(warnSpy).toHaveBeenCalledOnce();
   });
 });
 

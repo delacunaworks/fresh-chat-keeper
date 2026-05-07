@@ -419,18 +419,28 @@ async function judgeBatch(
 // ─── ヘルパー ─────────────────────────────────────────────────────────────────
 
 async function checkRateLimit(ip: string, kv: KVNamespace): Promise<boolean> {
-  const windowKey = Math.floor(Date.now() / (RATE_LIMIT_WINDOW_SECONDS * 1000));
-  const key = `rl:${ip}:${windowKey}`;
+  try {
+    const windowKey = Math.floor(Date.now() / (RATE_LIMIT_WINDOW_SECONDS * 1000));
+    const key = `rl:${ip}:${windowKey}`;
 
-  const current = await kv.get(key);
-  const count = current !== null ? parseInt(current, 10) : 0;
+    const current = await kv.get(key);
+    const count = current !== null ? parseInt(current, 10) : 0;
 
-  if (count >= RATE_LIMIT_MAX) {
-    return false;
+    if (count >= RATE_LIMIT_MAX) {
+      return false;
+    }
+
+    await kv.put(key, String(count + 1), { expirationTtl: RATE_LIMIT_WINDOW_SECONDS * 2 });
+    return true;
+  } catch (err) {
+    // KV 障害時は fail-open（リクエストを通す）。MVP 段階ではユーザーがフィルタを
+    // 失う可逸の方が、レート制限がたまに無効化されることよりも痛い。warn ログで
+    // 障害の発生を可視化し、頻発するなら別途対応を検討する。
+    console.warn(
+      `[FreshChatKeeper] KV rate limit error (failing open): ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return true;
   }
-
-  await kv.put(key, String(count + 1), { expirationTtl: RATE_LIMIT_WINDOW_SECONDS * 2 });
-  return true;
 }
 
 /** LLM 判定失敗時の verdict をモードに応じて決定する。lenient では安全側（allow）に倒す。 */
@@ -479,4 +489,5 @@ export const __test__ = {
   buildGenreTemplateField,
   uncertainVerdict,
   categoryToVerdict,
+  checkRateLimit,
 };
