@@ -1,0 +1,28 @@
+name = "fresh-chat-keeper-api"
+main = "src/index.ts"
+compatibility_date = "2026-04-27"
+
+# 本番リソースの ID は wrangler コマンドで作成後に埋める想定（B2 の作業）。
+# 現状はローカル開発用のプレースホルダー。
+
+# COLLECTION_SALT は P2.5-LEGAL-01 で確定する VTuber 1B 互換 salt。
+# wrangler secret put COLLECTION_SALT で本番に設定（ここでは値を持たない）。
+# ローカル開発時は .dev.vars に書く（gitignore 済み）。
+
+[[d1_databases]]
+binding = "COLLECTION_DB"
+database_name = "fck-collection-db"
+database_id = "<wrangler d1 create で発行された ID を埋める>"
+migrations_dir = "migrations"
+
+[[kv_namespaces]]
+binding = "RATE_LIMIT_KV"
+id = "<wrangler kv namespace create で作成、apps/proxy とは別 namespace>"
+
+[[kv_namespaces]]
+binding = "CONSENT_KV"
+id = "<wrangler kv namespace create で作成、現在有効な consentVersion を保管>"
+
+# 90 日 retention の cron trigger（B2 の retention.ts 実装後に有効化）
+# [triggers]
+# crons = ["0 3 * * *"]  # 毎日 03:00 UTC
