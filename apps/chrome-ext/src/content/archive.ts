@@ -499,7 +499,10 @@ async function drainStage2Queue(): Promise<void> {
       const usage = await getStage2Usage();
       if (usage.messageCount >= STAGE2_MONTHLY_LIMIT) {
         console.log(`[FreshChatKeeper] Stage 2月間上限(${STAGE2_MONTHLY_LIMIT}回)に達しました。Stage 1のみで動作を継続します。`);
-        stage2Queue = [];
+        // clearStage2Queue() を使い、pending 中の DOM 要素を showPendingElement で
+        // 復元してから queue を空にする。`stage2Queue = []` だけだと hidePendingElement
+        // で非表示中の要素がタイムアウト（5 秒）まで非表示のまま残ってしまう。
+        clearStage2Queue();
         break;
       }
 
