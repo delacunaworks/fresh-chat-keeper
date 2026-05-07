@@ -239,7 +239,7 @@ function ProgressSettings({
             onChange({ ...progress, progressModel: 'chapter', currentChapterId: e.target.value })
           }
         >
-          <option value="">-- 進行状況を選択 --</option>
+          <option value="">-- 視聴中のチャプターを選択 --</option>
           {chapters.map((ch) => (
             <option key={ch.id} value={ch.id}>
               {ch.title}
@@ -247,7 +247,7 @@ function ProgressSettings({
           ))}
         </select>
         <p className="text-xs text-gray-400 mt-1.5">
-          現在プレイ中（未クリア）のチャプターを選択してください。選択したチャプター以降のネタバレをブロックします。
+          いま視聴中のチャプターを選んでください。そのチャプター内のネタバレも自動でブロックされます。
         </p>
       </>
     );
