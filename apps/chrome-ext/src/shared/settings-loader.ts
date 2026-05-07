@@ -126,9 +126,22 @@ export async function saveSettings(settings: Settings): Promise<void> {
 }
 
 async function migrateLegacyToV2(raw: unknown): Promise<Settings> {
-  const partial = (typeof raw === 'object' && raw !== null && !Array.isArray(raw))
-    ? (raw as Partial<Settings>)
-    : {};
+  const isValidShape = typeof raw === 'object' && raw !== null && !Array.isArray(raw);
+
+  if (!isValidShape) {
+    // chrome.storage.local の fck_settings に不正な型が入っているケース。
+    // 通常は v1 オブジェクトが期待されるが、過去の手動操作・拡張バグ・別拡張との
+    // ストレージ衝突などで string / number / array 等が入ることがある。
+    // DEFAULT_SETTINGS に倒すこと自体は妥当だが、サイレントにするとサポート時に
+    // 原因究明できないため warn ログで型を可視化する。
+    console.warn(
+      `[FreshChatKeeper] Settings migration: unexpected raw type (${
+        Array.isArray(raw) ? 'array' : raw === null ? 'null' : typeof raw
+      }), falling back to DEFAULT_SETTINGS`,
+    );
+  }
+
+  const partial = isValidShape ? (raw as Partial<Settings>) : {};
 
   const merged: Settings = { ...DEFAULT_SETTINGS, ...partial };
   const stored: StoredSettingsV2 = { ...merged, version: 2 };
