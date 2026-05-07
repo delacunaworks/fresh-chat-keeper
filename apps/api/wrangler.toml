@@ -12,16 +12,16 @@ compatibility_date = "2026-04-27"
 [[d1_databases]]
 binding = "COLLECTION_DB"
 database_name = "fck-collection-db"
-database_id = "<wrangler d1 create で発行された ID を埋める>"
+database_id = "11e45df4-e58f-4842-a018-23ec486e5648"
 migrations_dir = "migrations"
 
 [[kv_namespaces]]
 binding = "RATE_LIMIT_KV"
-id = "<wrangler kv namespace create で作成、apps/proxy とは別 namespace>"
+id = "3cb19ee1fcb34b83a296009474895862"
 
 [[kv_namespaces]]
 binding = "CONSENT_KV"
-id = "<wrangler kv namespace create で作成、現在有効な consentVersion を保管>"
+id = "30f59e56c01c473aab81dd2d08f5faf4"
 
 # 90 日 retention の cron trigger（B2 の retention.ts 実装後に有効化）
 # [triggers]
