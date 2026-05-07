@@ -102,7 +102,8 @@ describe('buildSystemPrompt', () => {
     const blocks = buildSystemPrompt(ctx, { supportsCaching: true });
     expect(blocks).toHaveLength(2);
     expect(blocks[1].text).toContain('ゲーム: ace-attorney-1');
-    expect(blocks[1].text).toContain('チャプター「ch3」まで通過済み');
+    // v0.3.1 PROG-01: 「視聴中（未通過）」の文言に変更
+    expect(blocks[1].text).toContain('現在チャプター「ch3」を視聴中（未通過）');
   });
 
   it('gameId + ジャンルテンプレート併用 → 両方記述', () => {
@@ -137,6 +138,33 @@ describe('buildSystemPrompt', () => {
     });
     const blocks = buildSystemPrompt(ctx, { supportsCaching: true });
     expect(blocks[1].text).toContain('通過済みイベント: e1, e3');
+  });
+
+  describe('v0.3.1 PROG-01: 視聴中セマンティクスの文言', () => {
+    it('chapter モードでは「視聴中（未通過）」と表現される（旧「まで通過済み」ではない）', () => {
+      const ctx = buildContext({
+        gameId: 'g',
+        progressType: 'chapter',
+        currentChapter: 'ch3',
+      });
+      const blocks = buildSystemPrompt(ctx, { supportsCaching: true });
+      const text = blocks[1].text;
+      expect(text).toContain('現在チャプター「ch3」を視聴中（未通過）');
+      // 旧文言が混入していないこと
+      expect(text).not.toContain('まで通過済み');
+    });
+
+    it('event モードの文言は変更されない（completedEventIds は通過済みの意味で正しい）', () => {
+      const ctx = buildContext({
+        gameId: 'g',
+        progressType: 'event',
+        completedEvents: ['e1', 'e2'],
+      });
+      const blocks = buildSystemPrompt(ctx, { supportsCaching: true });
+      // event モードはユーザーが「通過したイベント」を明示的にチェックする UI のため
+      // 「通過済み」表現が正しい
+      expect(blocks[1].text).toContain('通過済みイベント:');
+    });
   });
 });
 

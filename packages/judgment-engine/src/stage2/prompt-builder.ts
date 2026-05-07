@@ -191,10 +191,14 @@ const UNSET_PROGRESS = '未設定（ゲーム開始前として扱う）';
 function formatProgress(game: GameContext): string {
   switch (game.progressType) {
     case 'chapter':
+      // v0.3.1 PROG-01: 「視聴中セマンティクス」を反映した文言。
+      // currentChapter は「現在視聴中の章（未通過）」であり、その章自身のネタバレも
+      // フィルタ対象。LLM プロンプトでもこの解釈を明示する。
       return game.currentChapter
-        ? `チャプター「${game.currentChapter}」まで通過済み`
+        ? `現在チャプター「${game.currentChapter}」を視聴中（未通過）`
         : UNSET_PROGRESS;
     case 'event':
+      // event モードの completedEventIds は「通過済み」の意味で正しい（変更なし）
       return game.completedEvents && game.completedEvents.length > 0
         ? `通過済みイベント: ${game.completedEvents.join(', ')}`
         : UNSET_PROGRESS;
