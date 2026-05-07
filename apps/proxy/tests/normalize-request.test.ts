@@ -19,7 +19,18 @@ const {
   uncertainVerdict,
   categoryToVerdict,
   checkRateLimit,
+  isValidV2Settings,
 } = __test__;
+
+const VALID_V2_SETTINGS = {
+  version: 2,
+  enabled: true,
+  displayMode: 'placeholder',
+  filterMode: 'archive',
+  categories: { spoiler: { enabled: true, strength: 'standard' } },
+  customBlockWords: [],
+  userTier: 'free',
+};
 
 // default export が壊れていないことの軽い確認
 describe('worker default export', () => {
@@ -71,6 +82,97 @@ describe('handleJudge: バリデーション', () => {
     const res = await workerModule.fetch(req, buildEnv() as any);
     // 上限チェックを通過 → 200 (Anthropic API 失敗で uncertain fallback) または何らかの非 400
     expect(res.status).not.toBe(400);
+  });
+
+  describe('HARD-04: 新形式 settings の実行時検証', () => {
+    it('context.settings 欠損（context のみ）→ 400', async () => {
+      const req = buildRequest({
+        messages: [{ id: 'm1', text: 'hi' }],
+        context: {}, // settings なし
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res = await workerModule.fetch(req, buildEnv() as any);
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).toContain('Invalid context.settings format');
+    });
+
+    it('categories.spoiler.strength が不正 enum 値 → 400', async () => {
+      const badSettings = {
+        ...VALID_V2_SETTINGS,
+        categories: { spoiler: { enabled: true, strength: 'extreme' } }, // 不正
+      };
+      const req = buildRequest({
+        messages: [{ id: 'm1', text: 'hi' }],
+        context: { settings: badSettings },
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res = await workerModule.fetch(req, buildEnv() as any);
+      expect(res.status).toBe(400);
+    });
+
+    it('categories.spoiler が undefined → 400', async () => {
+      const badSettings = {
+        ...VALID_V2_SETTINGS,
+        categories: {}, // spoiler なし
+      };
+      const req = buildRequest({
+        messages: [{ id: 'm1', text: 'hi' }],
+        context: { settings: badSettings },
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res = await workerModule.fetch(req, buildEnv() as any);
+      expect(res.status).toBe(400);
+    });
+
+    it('正しい v2 settings は 400 にならない（実通信失敗で fallback）', async () => {
+      const req = buildRequest({
+        messages: [{ id: 'm1', text: 'hi' }],
+        context: { settings: VALID_V2_SETTINGS },
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res = await workerModule.fetch(req, buildEnv() as any);
+      expect(res.status).not.toBe(400);
+    });
+  });
+});
+
+describe('isValidV2Settings (HARD-04 unit)', () => {
+  it('正しい v2 settings → true', () => {
+    expect(isValidV2Settings(VALID_V2_SETTINGS)).toBe(true);
+  });
+
+  it('null / undefined / プリミティブ → false', () => {
+    expect(isValidV2Settings(null)).toBe(false);
+    expect(isValidV2Settings(undefined)).toBe(false);
+    expect(isValidV2Settings('string')).toBe(false);
+    expect(isValidV2Settings(42)).toBe(false);
+  });
+
+  it('version が数値でない → false', () => {
+    expect(isValidV2Settings({ ...VALID_V2_SETTINGS, version: 'two' })).toBe(false);
+  });
+
+  it('enabled が boolean でない → false', () => {
+    expect(isValidV2Settings({ ...VALID_V2_SETTINGS, enabled: 'true' })).toBe(false);
+  });
+
+  it('categories.spoiler.strength が enum 外 → false', () => {
+    expect(
+      isValidV2Settings({
+        ...VALID_V2_SETTINGS,
+        categories: { spoiler: { enabled: true, strength: 'extreme' } },
+      }),
+    ).toBe(false);
+  });
+
+  it('categories.spoiler.enabled が boolean でない → false', () => {
+    expect(
+      isValidV2Settings({
+        ...VALID_V2_SETTINGS,
+        categories: { spoiler: { enabled: 'yes', strength: 'standard' } },
+      }),
+    ).toBe(false);
   });
 });
 

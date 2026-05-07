@@ -173,8 +173,18 @@ async function handleJudge(request: Request, env: Env): Promise<Response> {
     return jsonError(`messages must not exceed ${MAX_MESSAGES_PER_REQUEST} items`, 400);
   }
 
-  // 旧形式は gameId or genre/selectedGenreTemplates が必須（新形式は context があれば OK）
-  if (!isNewFormat(bodyObj)) {
+  // 形式別バリデーション
+  if (isNewFormat(bodyObj)) {
+    // 新形式: context.settings の必須フィールドを実行時検証
+    const settings = (bodyObj['context'] as Record<string, unknown> | null)?.['settings'];
+    if (!isValidV2Settings(settings)) {
+      return jsonError(
+        'Invalid context.settings format (required: version, enabled, categories.spoiler.{enabled,strength})',
+        400,
+      );
+    }
+  } else {
+    // 旧形式: gameId or genre/selectedGenreTemplates が必須
     const legacy = bodyObj as unknown as LegacyJudgeRequest;
     const hasGenre =
       (legacy.selectedGenreTemplates && legacy.selectedGenreTemplates.length > 0) || !!legacy.genre;
@@ -194,6 +204,35 @@ async function handleJudge(request: Request, env: Env): Promise<Response> {
 
 function isNewFormat(body: Record<string, unknown>): boolean {
   return 'context' in body && typeof body['context'] === 'object' && body['context'] !== null;
+}
+
+/**
+ * 新形式リクエストの `context.settings` を実行時検証する。
+ *
+ * 必須フィールドのみを最低限ガード:
+ * - `version: number`（v2 マイグレーション後は 2）
+ * - `enabled: boolean`
+ * - `categories.spoiler.{enabled: boolean, strength: 'loose'|'standard'|'strict'}`
+ *
+ * 軽量化のため zod 等の追加依存は使わず手書きガード。検証範囲を広げたくなったら
+ * shared の {@link import('@fresh-chat-keeper/shared').migrateSettings} に
+ * フォールバックさせる方向で再設計する。
+ */
+function isValidV2Settings(settings: unknown): boolean {
+  if (typeof settings !== 'object' || settings === null) return false;
+  const s = settings as Record<string, unknown>;
+  if (typeof s['version'] !== 'number') return false;
+  if (typeof s['enabled'] !== 'boolean') return false;
+  return isValidCategorySettings(s['categories']);
+}
+
+function isValidCategorySettings(categories: unknown): boolean {
+  if (typeof categories !== 'object' || categories === null) return false;
+  const c = categories as Record<string, unknown>;
+  if (typeof c['spoiler'] !== 'object' || c['spoiler'] === null) return false;
+  const sp = c['spoiler'] as Record<string, unknown>;
+  if (typeof sp['enabled'] !== 'boolean') return false;
+  return sp['strength'] === 'loose' || sp['strength'] === 'standard' || sp['strength'] === 'strict';
 }
 
 function normalizeRequest(body: Record<string, unknown>): NormalizedRequest {
@@ -498,4 +537,5 @@ export const __test__ = {
   uncertainVerdict,
   categoryToVerdict,
   checkRateLimit,
+  isValidV2Settings,
 };
