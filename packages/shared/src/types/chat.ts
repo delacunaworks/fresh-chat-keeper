@@ -42,12 +42,21 @@ export type FilterMode = "strict" | "standard" | "lenient" | "off";
 
 /**
  * ユーザーのゲーム進行状況
+ *
+ * 進行状況セマンティクス（v0.3.1 PROG-01 で明示）:
+ * - chapter モード: 「視聴中セマンティクス」。`currentChapterId` は今プレイ中
+ *   （未通過）のチャプターを表し、その章自身のネタバレも保護対象
+ * - event モード: 「通過済みセマンティクス」。`completedEventIds` には既に
+ *   通過したイベントの ID を入れる（その後はネタバレ保護対象外）
  */
 export interface UserProgress {
   gameId: string;
   progressModel: "chapter" | "event";
-  /** チャプターモード: 現在のチャプターID */
+  /**
+   * チャプターモード: 現在視聴中のチャプターID（未通過）。
+   * このチャプター自身のキーワードもネタバレフィルタの対象になる。
+   */
   currentChapterId?: string;
-  /** イベントモード: 完了済みイベントIDのセット */
+  /** イベントモード: 通過済みイベントIDのリスト（その後はフィルタ対象外） */
   completedEventIds?: string[];
 }
