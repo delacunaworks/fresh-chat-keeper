@@ -25,6 +25,24 @@ export type {
 export type { MisreportEntry } from "./types/misreport.js";
 
 export type {
+  CollectionLabel,
+  StageACategory,
+  JudgmentMode,
+  LabelSource,
+  JudgmentStage,
+  TargetMessagePayload,
+  ContextMessage,
+  UserFeedbackPayload,
+  SpoilerJudgmentLog,
+  ConsentRecord,
+  IngestRequestPayload,
+  IngestResponsePayload,
+  ConsentVersionMismatchResponse,
+  RevokeRequestPayload,
+  RevokeResponsePayload,
+} from "./types/collection.js";
+
+export type {
   FilterSettings,
   FilterSettingsV1,
   GameContext,
