@@ -458,6 +458,14 @@ function categoryToVerdict(category: SpoilerCategory, filterMode: LegacyFilterMo
       return filterMode === 'strict' ? 'block' : 'allow';
     case 'safe':
       return 'allow';
+    default:
+      // LLM ハルシネーションで想定外の spoiler_category（例: "unknown" / typo /
+      // 未知ラベル）が返るケースのフォールバック。安全側に倒し、modeに応じた
+      // uncertain 判定（lenient: allow、それ以外: uncertain）を返す。
+      console.warn(
+        `[FreshChatKeeper] Unknown spoiler_category: ${String(category)}, falling back to uncertainVerdict`,
+      );
+      return uncertainVerdict(filterMode);
   }
 }
 

@@ -428,4 +428,27 @@ describe('verdict 計算', () => {
     expect(categoryToVerdict('safe', 'standard')).toBe('allow');
     expect(categoryToVerdict('safe', 'strict')).toBe('allow');
   });
+
+  describe('HARD-03: 未知の spoiler_category へのフォールバック', () => {
+    let warnSpy: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => {
+      warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+    afterEach(() => {
+      warnSpy.mockRestore();
+    });
+
+    it('未知の category（LLM ハルシネーション）→ uncertainVerdict にフォールバック', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const result = categoryToVerdict('unknown' as any, 'standard');
+      expect(result).toBe('uncertain');
+      expect(warnSpy).toHaveBeenCalledOnce();
+      expect(warnSpy.mock.calls[0]?.[0]).toContain('Unknown spoiler_category');
+    });
+
+    it('未知の category + lenient モード → allow（uncertainVerdict の挙動）', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect(categoryToVerdict('garbage' as any, 'lenient')).toBe('allow');
+    });
+  });
 });
