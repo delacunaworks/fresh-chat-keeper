@@ -19,9 +19,13 @@ export interface CustomNGWord {
 
 export interface GameProgress {
   progressModel: 'chapter' | 'event';
-  /** チャプターモデル: 現在プレイ中のチャプターID */
+  /**
+   * チャプターモデル: 現在視聴中のチャプターID（未通過）。
+   * このチャプター自身のキーワードもネタバレフィルタの対象になる
+   * （v0.3.1 PROG-01 の「視聴中セマンティクス」）。
+   */
   currentChapterId?: string;
-  /** イベントモデル: 通過済みイベントIDの配列 */
+  /** イベントモデル: 通過済みイベントIDの配列（通過後はフィルタ対象外） */
   completedEventIds?: string[];
 }
 

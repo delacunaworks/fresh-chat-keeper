@@ -5,7 +5,7 @@
  * Anthropic API への実通信は別レイヤーなので、ここでは純粋な正規化ロジックのみを検証。
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import workerModule from '../src/index.js';
 import { __test__ } from '../src/index.js';
 
@@ -18,7 +18,19 @@ const {
   buildGenreTemplateField,
   uncertainVerdict,
   categoryToVerdict,
+  checkRateLimit,
+  isValidV2Settings,
 } = __test__;
+
+const VALID_V2_SETTINGS = {
+  version: 2,
+  enabled: true,
+  displayMode: 'placeholder',
+  filterMode: 'archive',
+  categories: { spoiler: { enabled: true, strength: 'standard' } },
+  customBlockWords: [],
+  userTier: 'free',
+};
 
 // default export が壊れていないことの軽い確認
 describe('worker default export', () => {
@@ -70,6 +82,97 @@ describe('handleJudge: バリデーション', () => {
     const res = await workerModule.fetch(req, buildEnv() as any);
     // 上限チェックを通過 → 200 (Anthropic API 失敗で uncertain fallback) または何らかの非 400
     expect(res.status).not.toBe(400);
+  });
+
+  describe('HARD-04: 新形式 settings の実行時検証', () => {
+    it('context.settings 欠損（context のみ）→ 400', async () => {
+      const req = buildRequest({
+        messages: [{ id: 'm1', text: 'hi' }],
+        context: {}, // settings なし
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res = await workerModule.fetch(req, buildEnv() as any);
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error: string };
+      expect(body.error).toContain('Invalid context.settings format');
+    });
+
+    it('categories.spoiler.strength が不正 enum 値 → 400', async () => {
+      const badSettings = {
+        ...VALID_V2_SETTINGS,
+        categories: { spoiler: { enabled: true, strength: 'extreme' } }, // 不正
+      };
+      const req = buildRequest({
+        messages: [{ id: 'm1', text: 'hi' }],
+        context: { settings: badSettings },
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res = await workerModule.fetch(req, buildEnv() as any);
+      expect(res.status).toBe(400);
+    });
+
+    it('categories.spoiler が undefined → 400', async () => {
+      const badSettings = {
+        ...VALID_V2_SETTINGS,
+        categories: {}, // spoiler なし
+      };
+      const req = buildRequest({
+        messages: [{ id: 'm1', text: 'hi' }],
+        context: { settings: badSettings },
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res = await workerModule.fetch(req, buildEnv() as any);
+      expect(res.status).toBe(400);
+    });
+
+    it('正しい v2 settings は 400 にならない（実通信失敗で fallback）', async () => {
+      const req = buildRequest({
+        messages: [{ id: 'm1', text: 'hi' }],
+        context: { settings: VALID_V2_SETTINGS },
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const res = await workerModule.fetch(req, buildEnv() as any);
+      expect(res.status).not.toBe(400);
+    });
+  });
+});
+
+describe('isValidV2Settings (HARD-04 unit)', () => {
+  it('正しい v2 settings → true', () => {
+    expect(isValidV2Settings(VALID_V2_SETTINGS)).toBe(true);
+  });
+
+  it('null / undefined / プリミティブ → false', () => {
+    expect(isValidV2Settings(null)).toBe(false);
+    expect(isValidV2Settings(undefined)).toBe(false);
+    expect(isValidV2Settings('string')).toBe(false);
+    expect(isValidV2Settings(42)).toBe(false);
+  });
+
+  it('version が数値でない → false', () => {
+    expect(isValidV2Settings({ ...VALID_V2_SETTINGS, version: 'two' })).toBe(false);
+  });
+
+  it('enabled が boolean でない → false', () => {
+    expect(isValidV2Settings({ ...VALID_V2_SETTINGS, enabled: 'true' })).toBe(false);
+  });
+
+  it('categories.spoiler.strength が enum 外 → false', () => {
+    expect(
+      isValidV2Settings({
+        ...VALID_V2_SETTINGS,
+        categories: { spoiler: { enabled: true, strength: 'extreme' } },
+      }),
+    ).toBe(false);
+  });
+
+  it('categories.spoiler.enabled が boolean でない → false', () => {
+    expect(
+      isValidV2Settings({
+        ...VALID_V2_SETTINGS,
+        categories: { spoiler: { enabled: 'yes', strength: 'standard' } },
+      }),
+    ).toBe(false);
   });
 });
 
@@ -331,6 +434,72 @@ describe('normalizeRequest', () => {
   });
 });
 
+describe('checkRateLimit (HARD-01: KV 障害時 fail-open)', () => {
+  function createMockKV(overrides?: Partial<{ get: () => Promise<string | null>; put: () => Promise<void> }>): unknown {
+    const store = new Map<string, string>();
+    return {
+      async get(key: string) {
+        if (overrides?.get) return overrides.get();
+        return store.get(key) ?? null;
+      },
+      async put(key: string, value: string) {
+        if (overrides?.put) return overrides.put();
+        store.set(key, value);
+      },
+    };
+  }
+
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  beforeEach(() => {
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    warnSpy.mockRestore();
+  });
+
+  it('正常系: KV から count を取得して制限内なら true', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await checkRateLimit('1.2.3.4', createMockKV() as any);
+    expect(result).toBe(true);
+    expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it('上限超過時は false', async () => {
+    const kv = createMockKV({
+      get: async () => '99', // RATE_LIMIT_MAX (30) を超えた値
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await checkRateLimit('1.2.3.4', kv as any);
+    expect(result).toBe(false);
+  });
+
+  it('KV.get が throw しても fail-open で true を返し、warn ログを出す', async () => {
+    const kv = createMockKV({
+      get: async () => {
+        throw new Error('KV connection failed');
+      },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await checkRateLimit('1.2.3.4', kv as any);
+    expect(result).toBe(true);
+    expect(warnSpy).toHaveBeenCalledOnce();
+    expect(warnSpy.mock.calls[0]?.[0]).toContain('failing open');
+    expect(warnSpy.mock.calls[0]?.[0]).toContain('KV connection failed');
+  });
+
+  it('KV.put が throw しても fail-open で true を返す', async () => {
+    const kv = createMockKV({
+      put: async () => {
+        throw new Error('KV write failed');
+      },
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const result = await checkRateLimit('1.2.3.4', kv as any);
+    expect(result).toBe(true);
+    expect(warnSpy).toHaveBeenCalledOnce();
+  });
+});
+
 describe('verdict 計算', () => {
   it('uncertainVerdict は lenient モードで allow に倒す', () => {
     expect(uncertainVerdict('lenient')).toBe('allow');
@@ -360,5 +529,28 @@ describe('verdict 計算', () => {
     expect(categoryToVerdict('safe', 'lenient')).toBe('allow');
     expect(categoryToVerdict('safe', 'standard')).toBe('allow');
     expect(categoryToVerdict('safe', 'strict')).toBe('allow');
+  });
+
+  describe('HARD-03: 未知の spoiler_category へのフォールバック', () => {
+    let warnSpy: ReturnType<typeof vi.spyOn>;
+    beforeEach(() => {
+      warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+    afterEach(() => {
+      warnSpy.mockRestore();
+    });
+
+    it('未知の category（LLM ハルシネーション）→ uncertainVerdict にフォールバック', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const result = categoryToVerdict('unknown' as any, 'standard');
+      expect(result).toBe('uncertain');
+      expect(warnSpy).toHaveBeenCalledOnce();
+      expect(warnSpy.mock.calls[0]?.[0]).toContain('Unknown spoiler_category');
+    });
+
+    it('未知の category + lenient モード → allow（uncertainVerdict の挙動）', () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect(categoryToVerdict('garbage' as any, 'lenient')).toBe('allow');
+    });
   });
 });

@@ -48,6 +48,16 @@ function getBlockedLevels(mode: FilterMode): string[] {
 
 /**
  * 知識ベースから現在のフィルタモード・進行状況に応じたキーワード集合を構築する。
+ *
+ * **進行状況セマンティクス（v0.3.1 PROG-01 で明示）**:
+ * - `currentChapterId` は「現在視聴中のチャプター（未通過）」を意味する
+ * - `currentChapter 自身`のキーワードはブロック対象（視聴中なのでネタバレを避ける）
+ * - `currentChapter より前`のチャプターのキーワードは通過済みとして除外
+ * - `currentChapter より後`のチャプターのキーワードもブロック対象（先のネタバレ）
+ *
+ * 除外条件: `currentChapterIdx > unlockedIdx`
+ *   = 「アンロック章が現在視聴中の章より前」のときのみ除外
+ *   = 「アンロック章が現在の章と同じ または より後」はブロック対象として残す
  */
 export function buildKeywordSet(
   gameId: string,
@@ -78,6 +88,8 @@ export function buildKeywordSet(
       currentChapterIdx !== -1
     ) {
       const unlockedIdx = chapters.findIndex((c) => c.id === entity.unlocked_after_chapter);
+      // 視聴中セマンティクス: アンロック章が現在の章より「前」のものだけ除外。
+      // 同じ章 (==) または より後 (<) はブロック対象として残す。
       if (unlockedIdx !== -1 && currentChapterIdx > unlockedIdx) return false;
     }
 

@@ -173,8 +173,18 @@ async function handleJudge(request: Request, env: Env): Promise<Response> {
     return jsonError(`messages must not exceed ${MAX_MESSAGES_PER_REQUEST} items`, 400);
   }
 
-  // 旧形式は gameId or genre/selectedGenreTemplates が必須（新形式は context があれば OK）
-  if (!isNewFormat(bodyObj)) {
+  // 形式別バリデーション
+  if (isNewFormat(bodyObj)) {
+    // 新形式: context.settings の必須フィールドを実行時検証
+    const settings = (bodyObj['context'] as Record<string, unknown> | null)?.['settings'];
+    if (!isValidV2Settings(settings)) {
+      return jsonError(
+        'Invalid context.settings format (required: version, enabled, categories.spoiler.{enabled,strength})',
+        400,
+      );
+    }
+  } else {
+    // 旧形式: gameId or genre/selectedGenreTemplates が必須
     const legacy = bodyObj as unknown as LegacyJudgeRequest;
     const hasGenre =
       (legacy.selectedGenreTemplates && legacy.selectedGenreTemplates.length > 0) || !!legacy.genre;
@@ -194,6 +204,35 @@ async function handleJudge(request: Request, env: Env): Promise<Response> {
 
 function isNewFormat(body: Record<string, unknown>): boolean {
   return 'context' in body && typeof body['context'] === 'object' && body['context'] !== null;
+}
+
+/**
+ * 新形式リクエストの `context.settings` を実行時検証する。
+ *
+ * 必須フィールドのみを最低限ガード:
+ * - `version: number`（v2 マイグレーション後は 2）
+ * - `enabled: boolean`
+ * - `categories.spoiler.{enabled: boolean, strength: 'loose'|'standard'|'strict'}`
+ *
+ * 軽量化のため zod 等の追加依存は使わず手書きガード。検証範囲を広げたくなったら
+ * shared の {@link import('@fresh-chat-keeper/shared').migrateSettings} に
+ * フォールバックさせる方向で再設計する。
+ */
+function isValidV2Settings(settings: unknown): boolean {
+  if (typeof settings !== 'object' || settings === null) return false;
+  const s = settings as Record<string, unknown>;
+  if (typeof s['version'] !== 'number') return false;
+  if (typeof s['enabled'] !== 'boolean') return false;
+  return isValidCategorySettings(s['categories']);
+}
+
+function isValidCategorySettings(categories: unknown): boolean {
+  if (typeof categories !== 'object' || categories === null) return false;
+  const c = categories as Record<string, unknown>;
+  if (typeof c['spoiler'] !== 'object' || c['spoiler'] === null) return false;
+  const sp = c['spoiler'] as Record<string, unknown>;
+  if (typeof sp['enabled'] !== 'boolean') return false;
+  return sp['strength'] === 'loose' || sp['strength'] === 'standard' || sp['strength'] === 'strict';
 }
 
 function normalizeRequest(body: Record<string, unknown>): NormalizedRequest {
@@ -419,18 +458,28 @@ async function judgeBatch(
 // ─── ヘルパー ─────────────────────────────────────────────────────────────────
 
 async function checkRateLimit(ip: string, kv: KVNamespace): Promise<boolean> {
-  const windowKey = Math.floor(Date.now() / (RATE_LIMIT_WINDOW_SECONDS * 1000));
-  const key = `rl:${ip}:${windowKey}`;
+  try {
+    const windowKey = Math.floor(Date.now() / (RATE_LIMIT_WINDOW_SECONDS * 1000));
+    const key = `rl:${ip}:${windowKey}`;
 
-  const current = await kv.get(key);
-  const count = current !== null ? parseInt(current, 10) : 0;
+    const current = await kv.get(key);
+    const count = current !== null ? parseInt(current, 10) : 0;
 
-  if (count >= RATE_LIMIT_MAX) {
-    return false;
+    if (count >= RATE_LIMIT_MAX) {
+      return false;
+    }
+
+    await kv.put(key, String(count + 1), { expirationTtl: RATE_LIMIT_WINDOW_SECONDS * 2 });
+    return true;
+  } catch (err) {
+    // KV 障害時は fail-open（リクエストを通す）。MVP 段階ではユーザーがフィルタを
+    // 失う可逸の方が、レート制限がたまに無効化されることよりも痛い。warn ログで
+    // 障害の発生を可視化し、頻発するなら別途対応を検討する。
+    console.warn(
+      `[FreshChatKeeper] KV rate limit error (failing open): ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return true;
   }
-
-  await kv.put(key, String(count + 1), { expirationTtl: RATE_LIMIT_WINDOW_SECONDS * 2 });
-  return true;
 }
 
 /** LLM 判定失敗時の verdict をモードに応じて決定する。lenient では安全側（allow）に倒す。 */
@@ -448,6 +497,14 @@ function categoryToVerdict(category: SpoilerCategory, filterMode: LegacyFilterMo
       return filterMode === 'strict' ? 'block' : 'allow';
     case 'safe':
       return 'allow';
+    default:
+      // LLM ハルシネーションで想定外の spoiler_category（例: "unknown" / typo /
+      // 未知ラベル）が返るケースのフォールバック。安全側に倒し、modeに応じた
+      // uncertain 判定（lenient: allow、それ以外: uncertain）を返す。
+      console.warn(
+        `[FreshChatKeeper] Unknown spoiler_category: ${String(category)}, falling back to uncertainVerdict`,
+      );
+      return uncertainVerdict(filterMode);
   }
 }
 
@@ -479,4 +536,6 @@ export const __test__ = {
   buildGenreTemplateField,
   uncertainVerdict,
   categoryToVerdict,
+  checkRateLimit,
+  isValidV2Settings,
 };
