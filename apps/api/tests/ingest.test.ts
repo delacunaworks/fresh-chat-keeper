@@ -354,6 +354,19 @@ describe('POST /v1/ingest', () => {
     expect(res.status).toBe(503);
   });
 
+  it('500: COLLECTION_SALT が短すぎる場合は handler 到達後に 500', async () => {
+    const badSaltEnv = buildEnv();
+    badSaltEnv.env.COLLECTION_SALT = 'short';
+    const log = buildValidLog();
+    const req = buildIngestRequest({ consentVersion: '2026-05-01', logs: [log] });
+    const res = await workerModule.fetch(req, badSaltEnv.env as never);
+    expect(res.status).toBe(500);
+    const body = (await res.json()) as { error: string };
+    // エラー本文に salt 値そのものを含めない
+    expect(body.error).not.toContain('short');
+    expect(badSaltEnv.insertedLogs).toHaveLength(0);
+  });
+
   it('レスポンスの currentConsentVersion がサーバー版を反映する', async () => {
     const log = buildValidLog();
     const req = buildIngestRequest({ consentVersion: '2026-05-01', logs: [log] });

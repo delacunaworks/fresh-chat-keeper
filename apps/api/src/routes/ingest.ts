@@ -31,7 +31,7 @@ import type {
 import { tokenCheckMiddleware } from '../middleware/token-check.js';
 import { rateLimitMiddleware } from '../middleware/rate-limit.js';
 import { consentCheckMiddleware } from '../middleware/consent-check.js';
-import { hashAuthorChannelId, hashUserToken } from '../lib/hash.js';
+import { hashAuthorChannelId, hashUserToken, assertValidSalt } from '../lib/hash.js';
 import { toJudgmentLogRow, type JudgmentLogRow } from '../db/schema.js';
 import { insertJudgmentLogs } from '../db/repository.js';
 
@@ -77,6 +77,13 @@ ingestRouter.post(
 
     // ハッシュ化 + 行変換
     const salt = c.env.COLLECTION_SALT;
+    try {
+      assertValidSalt(salt);
+    } catch (err) {
+      // salt 未設定 / 短すぎは運用ミス。ログには長さ情報のみ（値は含めない）
+      console.error(err instanceof Error ? err.message : String(err));
+      return c.json({ error: 'Server misconfiguration' }, 500);
+    }
     const receivedAt = Date.now();
     const hashedUserToken = await hashUserToken(rawToken, salt);
 

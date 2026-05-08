@@ -15,9 +15,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { hashAuthorChannelId, hashUserToken, __test__ } from '../src/lib/hash.js';
+import { hashAuthorChannelId, hashUserToken, assertValidSalt, __test__ } from '../src/lib/hash.js';
 
-const { sha1Hex } = __test__;
+const { sha1Hex, MIN_SALT_LENGTH } = __test__;
 
 describe('sha1Hex (raw)', () => {
   it('空文字列の SHA-1 が既知ベクトルと一致する', async () => {
@@ -80,6 +80,37 @@ describe('hashAuthorChannelId', () => {
     const long = 'a'.repeat(10_000);
     const hex = await hashAuthorChannelId(long, 'salt');
     expect(hex).toMatch(/^[0-9a-f]{40}$/);
+  });
+});
+
+describe('assertValidSalt', () => {
+  it('十分な長さの salt は通過する', () => {
+    expect(() => assertValidSalt('a'.repeat(MIN_SALT_LENGTH))).not.toThrow();
+  });
+
+  it('空文字は弾く', () => {
+    expect(() => assertValidSalt('')).toThrow(/missing or too short/i);
+  });
+
+  it('undefined は弾く', () => {
+    expect(() => assertValidSalt(undefined)).toThrow(/missing or too short/i);
+  });
+
+  it('短すぎる salt（MIN_SALT_LENGTH 未満）は弾く', () => {
+    expect(() => assertValidSalt('short')).toThrow(/missing or too short/i);
+  });
+
+  it('空白のみの salt は弾く（trim 後に長さ判定）', () => {
+    expect(() => assertValidSalt('   '.repeat(MIN_SALT_LENGTH))).toThrow(/missing or too short/i);
+  });
+
+  it('エラーメッセージに salt 値そのものは含めない', () => {
+    const veryDistinctSalt = 'SECRET-LEAK-TEST-XXXX';
+    try {
+      assertValidSalt(veryDistinctSalt.slice(0, 5));
+    } catch (err) {
+      expect(err instanceof Error ? err.message : '').not.toContain('SECRET-LEAK-TEST');
+    }
   });
 });
 

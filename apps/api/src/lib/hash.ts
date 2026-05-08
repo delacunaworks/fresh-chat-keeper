@@ -16,6 +16,32 @@
  */
 
 /**
+ * salt の最小許容長。VTuber 1B は具体長を公開していないが、SHA-1 の出力空間
+ * 160bit に対して salt が短いと逆引きの計算量が下がる。Phase 2.5 では運用
+ * ミスとして「16 文字未満 / 空文字 / 空白のみ」を弾くポリシー。
+ */
+const MIN_SALT_LENGTH = 16;
+
+/**
+ * COLLECTION_SALT の妥当性をチェックする。
+ *
+ * 不正なら **値そのものは含めず** 例外を投げる。これは secret 漏洩リスクを
+ * 避けるため（エラーメッセージや stack trace に salt 値を載せない）。
+ *
+ * 呼び出し側（ingest / revoke ハンドラ）はこれを catch して 500 を返す。
+ */
+export function assertValidSalt(salt: string | undefined | null): asserts salt is string {
+  if (typeof salt !== 'string' || salt.trim().length < MIN_SALT_LENGTH) {
+    // 値そのものはログに出さない。長さ情報のみ（≒未設定 vs 短すぎ の判別用）。
+    const lenInfo = typeof salt === 'string' ? `length=${salt.length}` : 'undefined';
+    throw new Error(
+      `[fck-api] COLLECTION_SALT is missing or too short (${lenInfo}). ` +
+        `Minimum ${MIN_SALT_LENGTH} characters required.`,
+    );
+  }
+}
+
+/**
  * authorChannelId をハッシュ化。
  *
  * 仕様（VTuber 1B 互換）:
@@ -69,4 +95,4 @@ async function sha1Hex(input: string): Promise<string> {
 
 // ─── テスト用エクスポート ─────────────────────────────────────
 
-export const __test__ = { sha1Hex };
+export const __test__ = { sha1Hex, MIN_SALT_LENGTH };

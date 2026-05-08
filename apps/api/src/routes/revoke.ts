@@ -28,7 +28,7 @@ import type { Env } from '../env.js';
 import type { RevokeResponsePayload } from '@fresh-chat-keeper/shared';
 import { tokenCheckMiddleware } from '../middleware/token-check.js';
 import { rateLimitMiddleware } from '../middleware/rate-limit.js';
-import { hashUserToken } from '../lib/hash.js';
+import { hashUserToken, assertValidSalt } from '../lib/hash.js';
 import { revokeConsentAndDeleteLogs } from '../db/repository.js';
 
 export const revokeRouter = new Hono<{
@@ -43,15 +43,18 @@ revokeRouter.post(
   async (c) => {
     const rawToken = c.get('rawToken');
 
-    // body は任意（reason のみ将来用、Phase 2.5 では参照しない）。
-    // パース失敗は無視して空オブジェクト扱い。
-    try {
-      await c.req.json();
-    } catch {
-      // ignore: revoke は body 不要
-    }
+    // body は Phase 2.5 では未使用（型としては RevokeRequestPayload.reason を持つが
+    // 参照しない）。Hono の req.json() は冪等でないため、不要な読み出しは行わない。
+    // 将来 reason を活用するときに c.req.json() を明示的に呼ぶ。
 
-    const hashedToken = await hashUserToken(rawToken, c.env.COLLECTION_SALT);
+    const salt = c.env.COLLECTION_SALT;
+    try {
+      assertValidSalt(salt);
+    } catch (err) {
+      console.error(err instanceof Error ? err.message : String(err));
+      return c.json({ error: 'Server misconfiguration' }, 500);
+    }
+    const hashedToken = await hashUserToken(rawToken, salt);
 
     let deletedLogCount: number | null;
     try {
