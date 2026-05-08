@@ -141,6 +141,15 @@ const VALID_STAGE_A = new Set(['story_reference', 'reaction', 'meta', 'unknown']
 const VALID_STAGES = new Set(['stage1', 'stage1_5', 'stage2']);
 const VALID_LABEL_SOURCES = new Set(['haiku', 'user_report', 'moderator', 'tommy_manual']);
 
+/** YouTube チャットメッセージの本文上限（実 UI は 200 字、安全側に倒し 500） */
+const MAX_BODY_LENGTH = 500;
+/** preceding/following の各配列の最大長（設計書 §4.4: archive は N=10） */
+const MAX_CONTEXT_MESSAGES = 10;
+
+/** UUID（v4 含む全 variant）の正規表現。logId の形式チェックに使う。 */
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 /**
  * SpoilerJudgmentLog の必須フィールドと列挙値を検証する。
  *
@@ -158,6 +167,7 @@ function validateLog(log: unknown): string | null {
   const l = log as Partial<SpoilerJudgmentLog>;
 
   if (typeof l.logId !== 'string' || l.logId.length === 0) return 'logId is required';
+  if (!UUID_REGEX.test(l.logId)) return 'logId must be a valid UUID';
   if (typeof l.recordedAt !== 'string') return 'recordedAt is required';
   if (typeof l.consentVersion !== 'string') return 'consentVersion is required';
   if (typeof l.videoId !== 'string') return 'videoId is required';
@@ -172,6 +182,9 @@ function validateLog(log: unknown): string | null {
   }
   const t = l.targetMessage;
   if (typeof t.body !== 'string') return 'targetMessage.body is required';
+  if (t.body.length > MAX_BODY_LENGTH) {
+    return `targetMessage.body exceeds ${MAX_BODY_LENGTH} characters`;
+  }
   if (typeof t.authorChannelId !== 'string' || t.authorChannelId.length === 0) {
     return 'targetMessage.authorChannelId is required';
   }
@@ -179,11 +192,46 @@ function validateLog(log: unknown): string | null {
 
   // 配列
   if (!Array.isArray(l.precedingMessages)) return 'precedingMessages must be an array';
+  if (l.precedingMessages.length > MAX_CONTEXT_MESSAGES) {
+    return `precedingMessages must not exceed ${MAX_CONTEXT_MESSAGES} items`;
+  }
+  for (let i = 0; i < l.precedingMessages.length; i++) {
+    const m = l.precedingMessages[i];
+    if (typeof m !== 'object' || m === null) {
+      return `precedingMessages[${i}] must be an object`;
+    }
+    if (typeof m.body !== 'string' || m.body.length > MAX_BODY_LENGTH) {
+      return `precedingMessages[${i}].body invalid or exceeds ${MAX_BODY_LENGTH} chars`;
+    }
+    if (typeof m.timestamp !== 'string') {
+      return `precedingMessages[${i}].timestamp is required`;
+    }
+  }
   if (!Array.isArray(l.followingMessages)) return 'followingMessages must be an array';
+  if (l.followingMessages.length > MAX_CONTEXT_MESSAGES) {
+    return `followingMessages must not exceed ${MAX_CONTEXT_MESSAGES} items`;
+  }
+  for (let i = 0; i < l.followingMessages.length; i++) {
+    const m = l.followingMessages[i];
+    if (typeof m !== 'object' || m === null) {
+      return `followingMessages[${i}] must be an object`;
+    }
+    if (typeof m.body !== 'string' || m.body.length > MAX_BODY_LENGTH) {
+      return `followingMessages[${i}].body invalid or exceeds ${MAX_BODY_LENGTH} chars`;
+    }
+    if (typeof m.timestamp !== 'string') {
+      return `followingMessages[${i}].timestamp is required`;
+    }
+  }
 
   // 段階A / B
   if (typeof l.stageACategory !== 'string' || !VALID_STAGE_A.has(l.stageACategory)) {
     return 'stageACategory must be one of story_reference/reaction/meta/unknown';
+  }
+  if (l.stageAConfidence !== null && l.stageAConfidence !== undefined) {
+    if (typeof l.stageAConfidence !== 'number' || !isInUnitRange(l.stageAConfidence)) {
+      return 'stageAConfidence must be a number between 0 and 1, or null';
+    }
   }
   if (!Array.isArray(l.labels) || l.labels.length === 0) {
     return 'labels must be a non-empty array';
@@ -196,7 +244,9 @@ function validateLog(log: unknown): string | null {
   if (typeof l.primaryLabel !== 'string' || !VALID_LABELS.has(l.primaryLabel)) {
     return 'primaryLabel must be a valid CollectionLabel';
   }
-  if (typeof l.confidence !== 'number') return 'confidence must be a number';
+  if (typeof l.confidence !== 'number' || !isInUnitRange(l.confidence)) {
+    return 'confidence must be a number between 0 and 1';
+  }
   if (typeof l.stage !== 'string' || !VALID_STAGES.has(l.stage)) {
     return 'stage must be one of stage1/stage1_5/stage2';
   }
@@ -214,9 +264,17 @@ function validateLog(log: unknown): string | null {
   return null;
 }
 
+/** confidence / stage_a_confidence の範囲チェック（0〜1、NaN / Infinity を弾く） */
+function isInUnitRange(n: number): boolean {
+  return Number.isFinite(n) && n >= 0 && n <= 1;
+}
+
 // ─── テスト用エクスポート ─────────────────────────────────────
 
 export const __test__ = {
   MAX_BATCH,
+  MAX_BODY_LENGTH,
+  MAX_CONTEXT_MESSAGES,
   validateLog,
+  isInUnitRange,
 };

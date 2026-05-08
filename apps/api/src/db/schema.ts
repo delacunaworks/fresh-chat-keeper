@@ -155,6 +155,30 @@ export function toJudgmentLogRow(
 }
 
 /**
+ * 壊れた JSON 文字列を読み込む際の安全フォールバック。
+ *
+ * D1 側に json_valid() CHECK があるため通常は不正な JSON は入らないが、
+ * - マイグレーション前データの読み出し
+ * - DB 直接書き込みによる事故
+ * - スキーマ変更時の中間状態
+ * 等で例外が発生し得る。warn ログを残しデフォルト値を返すことで、
+ * fromJudgmentLogRow が 1 行の異常で全体クラッシュしないようにする。
+ */
+function safeJsonParse<T>(raw: string | null, fallback: T, fieldName: string): T {
+  if (raw === null) return fallback;
+  try {
+    return JSON.parse(raw) as T;
+  } catch (err) {
+    console.warn(
+      `[fck-api] safeJsonParse: failed to parse ${fieldName}: ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+    return fallback;
+  }
+}
+
+/**
  * D1 行を SpoilerJudgmentLog（ワイヤー形式）に戻す。
  *
  * Phase 2.5 では SELECT 系 API を持たないため、現状はテスト・将来の retention
@@ -179,21 +203,35 @@ export function fromJudgmentLogRow(row: JudgmentLogRow): SpoilerJudgmentLog {
       isModerator: fromBoolNullable(row.target_is_moderator),
       isVerified: fromBoolNullable(row.target_is_verified),
     },
-    precedingMessages: JSON.parse(row.preceding_messages_json) as ContextMessage[],
-    followingMessages: JSON.parse(row.following_messages_json) as ContextMessage[],
+    precedingMessages: safeJsonParse<ContextMessage[]>(
+      row.preceding_messages_json,
+      [],
+      'preceding_messages_json',
+    ),
+    followingMessages: safeJsonParse<ContextMessage[]>(
+      row.following_messages_json,
+      [],
+      'following_messages_json',
+    ),
     stageACategory: row.stage_a_category,
     stageAConfidence: row.stage_a_confidence,
-    labels: JSON.parse(row.labels_json) as CollectionLabel[],
+    labels: safeJsonParse<CollectionLabel[]>(row.labels_json, [], 'labels_json'),
     primaryLabel: row.primary_label,
     confidence: row.confidence,
     stage: row.stage,
     reasonJa: row.reason_ja,
     labelSource: row.label_source,
     reviewedByHuman: row.reviewed_by_human === 1,
-    userFeedback: row.user_feedback_json
-      ? (JSON.parse(row.user_feedback_json) as UserFeedbackPayload)
-      : null,
+    userFeedback: safeJsonParse<UserFeedbackPayload | null>(
+      row.user_feedback_json,
+      null,
+      'user_feedback_json',
+    ),
     extensionVersion: row.extension_version,
     userTokenHashed: row.user_token_hashed,
   };
 }
+
+// ─── テスト用エクスポート ─────────────────────────────────────
+
+export const __test__ = { safeJsonParse };
