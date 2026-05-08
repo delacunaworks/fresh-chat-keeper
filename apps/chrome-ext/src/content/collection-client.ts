@@ -1,14 +1,20 @@
 /**
- * Phase 2.5 データ収集 API クライアント（chrome-ext content-script 側）。
+ * Phase 2.5 データ収集 API クライアント（chrome-ext content-script / popup 側）。
  *
- * apps/api（B3 で完成）への以下 3 エンドポイントへの fetch ラッパー:
+ * apps/api への以下 3 エンドポイントへのラッパー:
  *   POST /v1/consent — opt-in 通知（モーダル承諾直後）
  *   POST /v1/ingest  — 判定ログ送信（バッチ最大 50 件、5s インターバル）
  *   POST /v1/revoke  — 同意取り消し
  *
+ * **BACKGROUND-01 (2026-05)**: 旧設計では content-script から直接 fetch して
+ * いたが、Chrome 147 の MV3 仕様により host_permissions ありでも fetch は
+ * 注入先 origin (https://www.youtube.com) で発行される。本番安全性のため
+ * `chrome.runtime.sendMessage` 経由で background service worker に依頼し、
+ * chrome-extension:// origin で fetch を発火する設計に統一。popup からの
+ * fetch も同経路を通る（一貫性のため）。詳細は
+ * `apps/chrome-ext/src/background/service-worker.ts` の handleBgFetch 参照。
+ *
  * 設計判断:
- * - chrome-transport.ts と同じく content-script から直接 fetch（host_permissions
- *   経由で CORS 通過）。background 経由化は将来課題。
  * - opt-in OFF のユーザーは本モジュールを呼ばない（filter-orchestrator 側で
  *   getCollectionConsent() の null チェックでガード）
  * - 410 Gone（consent_version_mismatch）→ 同意モーダル再表示通知を popup へ
@@ -23,6 +29,9 @@ import type {
   ConsentNotifyRequestPayload,
   ConsentNotifyResponsePayload,
   RevokeResponsePayload,
+  BackgroundFetchRequest,
+  BackgroundFetchResponse,
+  BgFetchEndpoint,
 } from '@fresh-chat-keeper/shared';
 
 // ─── 設定値 ────────────────────────────────────────────────────
@@ -92,6 +101,55 @@ export interface CollectionClientContext {
   token: string;
 }
 
+// ─── background 経由 fetch ヘルパー ────────────────────────────
+
+/**
+ * background service worker 経由で fetch を発行する。
+ *
+ * BACKGROUND-01 の心臓部。content-script / popup から直接 fetch する代わりに
+ * `chrome.runtime.sendMessage` で background に依頼し、background が
+ * chrome-extension:// origin で fetch を実行する。これにより本番 ALLOWED_ORIGINS は
+ * chrome-extension のみで済み、youtube.com 等の緩和許可は不要になる。
+ *
+ * 失敗パターン:
+ * - sendMessage 自体が throw（chrome.runtime が無効化された等） → network
+ * - response が undefined（背景にリスナーがない / sendResponse されなかった） → network
+ * - response が `{ ok: false, ... }` → そのまま返却
+ */
+async function bgFetch(
+  endpoint: BgFetchEndpoint,
+  ctx: CollectionClientContext,
+  body: unknown,
+): Promise<BackgroundFetchResponse> {
+  const req: BackgroundFetchRequest = {
+    type: 'fck:bg-fetch',
+    endpoint,
+    apiUrl: ctx.apiUrl,
+    token: ctx.token,
+    body,
+  };
+  let res: BackgroundFetchResponse | undefined;
+  try {
+    res = (await chrome.runtime.sendMessage(req)) as
+      | BackgroundFetchResponse
+      | undefined;
+  } catch (err) {
+    return {
+      ok: false,
+      kind: 'network',
+      message: err instanceof Error ? err.message : String(err),
+    };
+  }
+  if (res === undefined || res === null) {
+    return {
+      ok: false,
+      kind: 'network',
+      message: 'no response from background service worker',
+    };
+  }
+  return res;
+}
+
 // ─── consent / revoke（一発系 API）─────────────────────────────
 
 /**
@@ -107,19 +165,22 @@ export async function notifyConsent(
   consentVersion: string,
 ): Promise<ConsentNotifyResponsePayload> {
   const payload: ConsentNotifyRequestPayload = { consentVersion };
-  const res = await fetch(`${ctx.apiUrl}/v1/consent`, {
-    method: 'POST',
-    headers: jsonHeaders(ctx.token),
-    body: JSON.stringify(payload),
-  });
+  const res = await bgFetch('consent', ctx, payload);
+
+  if (!res.ok) {
+    // network / invalid-origin / invalid-request: サーバーに到達できなかった
+    // 既存呼び出し側 (App.tsx handleConsent) は ConsentApiError 以外を
+    // 「ネットワークエラー」としてユーザーに表示するため、通常 Error を投げる
+    throw new Error(`bg-fetch failed (${res.kind}): ${res.message}`);
+  }
 
   if (res.status === 200) {
-    return (await res.json()) as ConsentNotifyResponsePayload;
+    return res.json as ConsentNotifyResponsePayload;
   }
 
   // 422: unknown consentVersion 等（クライアントが古い）
   // それ以外: サーバー側不具合 or auth 問題
-  throw new ConsentApiError(res.status, await safeReadBody(res));
+  throw new ConsentApiError(res.status, jsonToBodyString(res.json));
 }
 
 /**
@@ -131,17 +192,16 @@ export async function notifyConsent(
 export async function notifyRevoke(
   ctx: CollectionClientContext,
 ): Promise<RevokeResponsePayload> {
-  const res = await fetch(`${ctx.apiUrl}/v1/revoke`, {
-    method: 'POST',
-    headers: jsonHeaders(ctx.token),
-    // body 不要だが Content-Length: 0 を避けるため空オブジェクトを送る
-    body: JSON.stringify({}),
-  });
+  // body 不要だが Content-Length: 0 を避けるため空オブジェクトを送る
+  const res = await bgFetch('revoke', ctx, {});
 
-  if (res.status === 200) {
-    return (await res.json()) as RevokeResponsePayload;
+  if (!res.ok) {
+    throw new Error(`bg-fetch failed (${res.kind}): ${res.message}`);
   }
-  throw new ConsentApiError(res.status, await safeReadBody(res));
+  if (res.status === 200) {
+    return res.json as RevokeResponsePayload;
+  }
+  throw new ConsentApiError(res.status, jsonToBodyString(res.json));
 }
 
 // ─── ingest（バッチ送信） ─────────────────────────────────────
@@ -267,7 +327,7 @@ export class IngestClient {
   /**
    * 1 バッチを送信。戻り値:
    * - 'success': 200 OK
-   * - 'drop': 410 / 422 / 401。再送しない（呼び出し側もリトライしない）
+   * - 'drop': 410 / 422 / 401 / invalid-origin。再送しない
    * - 'retry': 429 / 5xx / network。バックオフ後再試行候補
    */
   private async sendBatch(
@@ -276,29 +336,23 @@ export class IngestClient {
     const consentVersion = batch[0]?.consentVersion ?? '';
     const payload: IngestRequestPayload = { consentVersion, logs: batch };
 
-    let res: Response;
-    try {
-      res = await fetch(`${this.ctx.apiUrl}/v1/ingest`, {
-        method: 'POST',
-        headers: jsonHeaders(this.ctx.token),
-        body: JSON.stringify(payload),
-      });
-    } catch (err) {
-      // ネットワーク障害（DNS / TLS / オフライン）
-      console.warn(
-        `[FreshChatKeeper] ingest network error: ${err instanceof Error ? err.message : String(err)}`,
+    const res = await bgFetch('ingest', this.ctx, payload);
+
+    if (!res.ok) {
+      if (res.kind === 'network') {
+        console.warn(`[FreshChatKeeper] ingest network error: ${res.message}`);
+        return 'retry';
+      }
+      // invalid-origin / invalid-request: 設定不正なので再送しても直らない
+      console.error(
+        `[FreshChatKeeper] ingest ${res.kind} (${batch.length} logs dropped): ${res.message}`,
       );
-      return 'retry';
+      return 'drop';
     }
 
     if (res.status === 200) {
       // body は読まずに破棄（サーバーが返す accepted/rejected はログだけで使う想定）
-      try {
-        const _body = (await res.json()) as IngestResponsePayload;
-        void _body;
-      } catch {
-        // body 解析失敗でも 200 なら成功扱い
-      }
+      void (res.json as IngestResponsePayload);
       return 'success';
     }
 
@@ -307,21 +361,16 @@ export class IngestClient {
       // popup に再同意モーダル表示を通知。consent state は popup 側で
       // 「現在 opt-in 中だが mismatch を検出した」状態を示し、ユーザーアクション
       // を促す（content script 側で勝手に同意取り消しはしない）
-      try {
-        const body = (await res.json()) as { error?: string; currentConsentVersion?: string };
-        const currentConsentVersion = body.currentConsentVersion ?? '';
-        this.notifyConsentRefresh(currentConsentVersion);
-      } catch {
-        this.notifyConsentRefresh('');
-      }
+      const body = res.json as { error?: string; currentConsentVersion?: string } | null;
+      const currentConsentVersion = body?.currentConsentVersion ?? '';
+      this.notifyConsentRefresh(currentConsentVersion);
       return 'drop';
     }
 
     if (res.status === 422) {
       // バリデーション失敗。クライアント側のログ構築バグなので再送しても直らない
-      const body = await safeReadBody(res);
       console.error(
-        `[FreshChatKeeper] ingest 422 (${batch.length} logs dropped): ${body}`,
+        `[FreshChatKeeper] ingest 422 (${batch.length} logs dropped): ${jsonToBodyString(res.json)}`,
       );
       return 'drop';
     }
@@ -374,18 +423,17 @@ export class IngestClient {
 
 // ─── ヘルパー ──────────────────────────────────────────────────
 
-function jsonHeaders(token: string): HeadersInit {
-  return {
-    'Content-Type': 'application/json',
-    'x-fck-token': token,
-  };
-}
-
-async function safeReadBody(res: Response): Promise<string> {
+/**
+ * background が parse 済みで返す json を ConsentApiError.body の string に正規化する。
+ * オブジェクトは JSON.stringify、null/undefined は空文字、文字列はそのまま。
+ */
+function jsonToBodyString(json: unknown): string {
+  if (json === null || json === undefined) return '';
+  if (typeof json === 'string') return json;
   try {
-    return await res.text();
+    return JSON.stringify(json);
   } catch {
-    return '';
+    return String(json);
   }
 }
 

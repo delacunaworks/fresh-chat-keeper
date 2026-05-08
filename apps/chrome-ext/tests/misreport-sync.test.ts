@@ -28,11 +28,18 @@ interface FakeStorage {
   listeners: Array<
     (changes: Record<string, chrome.storage.StorageChange>, area: string) => void
   >;
+  /**
+   * BACKGROUND-01 後は IngestClient が chrome.runtime.sendMessage 経由で
+   * background に依頼するため、bg-fetch メッセージをここで捕捉して
+   * 200 OK レスポンスを返す（テスト用 stub）。
+   */
+  bgFetchCalls: unknown[];
 }
 
 function installFakeChrome(): FakeStorage {
   const store = new Map<string, unknown>();
   const listeners: FakeStorage['listeners'] = [];
+  const bgFetchCalls: unknown[] = [];
 
   const fake = {
     storage: {
@@ -74,12 +81,23 @@ function installFakeChrome(): FakeStorage {
       },
     },
     runtime: {
-      sendMessage: async () => undefined,
+      sendMessage: async (msg: unknown) => {
+        if (
+          typeof msg === 'object' &&
+          msg !== null &&
+          (msg as { type?: string }).type === 'fck:bg-fetch'
+        ) {
+          bgFetchCalls.push(msg);
+          // 200 OK で受理した想定。json: null（呼び出し側は使わない）
+          return { ok: true, status: 200, json: null };
+        }
+        return undefined;
+      },
       getManifest: () => ({ version: '0.3.5' }),
     },
   };
   (globalThis as unknown as { chrome: unknown }).chrome = fake;
-  return { store, listeners };
+  return { store, listeners, bgFetchCalls };
 }
 
 import type { EmitJudgmentInput } from '../src/content/collection-emit.js';
@@ -112,17 +130,11 @@ const userFeedback = {
   freeTextReason: null,
 };
 
+let chromeState: FakeStorage;
+
 beforeEach(() => {
-  installFakeChrome();
+  chromeState = installFakeChrome();
   emitTestExports.reset();
-  // 全テストで使う fetch モック（200 OK）
-  globalThis.fetch = vi.fn(
-    async () =>
-      new Response(JSON.stringify({ accepted: 1 }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-  ) as unknown as typeof fetch;
   vi.useFakeTimers();
 });
 
@@ -136,7 +148,7 @@ describe('emitMisreportLog', () => {
     // initCollectionEmitter なし、または consent 未保存
     const result = emitMisreportLog(buildInput(), userFeedback);
     expect(result).toBeNull();
-    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(chromeState.bgFetchCalls).toHaveLength(0);
   });
 
   it('opt-in 中は logId を返し、IngestClient のバッファに積まれる', async () => {
@@ -152,16 +164,19 @@ describe('emitMisreportLog', () => {
     expect(result).not.toBeNull();
     expect(result).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 
-    // 5 秒タイマーで flush され fetch が走る
+    // 5 秒タイマーで flush され bg-fetch が走る
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    expect(chromeState.bgFetchCalls).toHaveLength(1);
 
     // 送信された body の logs[0] に user_report ラベルと userFeedback が含まれる
-    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
-    const body = JSON.parse(String(fetchMock.mock.calls[0][1].body));
-    expect(body.logs[0].labelSource).toBe('user_report');
-    expect(body.logs[0].userFeedback.correctLabel).toBe('safe');
-    expect(body.logs[0].logId).toBe(result);
+    const call = chromeState.bgFetchCalls[0] as {
+      endpoint: string;
+      body: { logs: Array<{ labelSource: string; userFeedback: { correctLabel: string }; logId: string }> };
+    };
+    expect(call.endpoint).toBe('ingest');
+    expect(call.body.logs[0].labelSource).toBe('user_report');
+    expect(call.body.logs[0].userFeedback.correctLabel).toBe('safe');
+    expect(call.body.logs[0].logId).toBe(result);
   });
 
   it('未許可 apiUrl で初期化された場合は opt-in 状態でも null を返す', async () => {

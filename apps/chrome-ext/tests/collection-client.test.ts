@@ -1,9 +1,13 @@
 /**
  * collection-client.ts の単体テスト。
  *
- * fetch をモック化して以下を検証:
+ * **BACKGROUND-01 (2026-05) 以降**: fetch 直接呼び出しではなく、
+ * `chrome.runtime.sendMessage` 経由で background に依頼するため、
+ * モック対象は chrome.runtime.sendMessage（BackgroundFetchResponse を返す）。
+ *
+ * 検証内容:
  * - notifyConsent: 200 / 422 / network error
- * - notifyRevoke: 200 / 422
+ * - notifyRevoke: 200 / 500
  * - IngestClient.enqueueLog: 50 件で自動フラッシュ
  * - IngestClient.flush: 200 / 410 / 422 / 429 のステータス別ハンドリング
  * - IngestClient.abort: バッファクリア + タイマー停止
@@ -21,7 +25,11 @@ import {
   FLUSH_INTERVAL_MS,
   type CollectionClientContext,
 } from '../src/content/collection-client.js';
-import type { SpoilerJudgmentLog } from '@fresh-chat-keeper/shared';
+import type {
+  SpoilerJudgmentLog,
+  BackgroundFetchRequest,
+  BackgroundFetchResponse,
+} from '@fresh-chat-keeper/shared';
 
 const ctx: CollectionClientContext = {
   apiUrl: 'http://localhost:8788',
@@ -64,95 +72,124 @@ function makeLog(i: number): SpoilerJudgmentLog {
   };
 }
 
-/** fetch をモック化し、レスポンスシーケンスを順番に返す helper */
-function mockFetchSequence(
-  responses: Array<{ status: number; body?: unknown; throwError?: boolean }>,
-): { calls: Array<{ url: string; init: RequestInit | undefined }>; restore: () => void } {
-  const calls: Array<{ url: string; init: RequestInit | undefined }> = [];
-  let i = 0;
-  const original = globalThis.fetch;
-  // @ts-expect-error: テスト用の簡易型
-  globalThis.fetch = vi.fn(async (url: string, init?: RequestInit) => {
-    calls.push({ url, init });
-    const r = responses[Math.min(i, responses.length - 1)];
-    i += 1;
-    if (r.throwError) throw new Error('network down');
-    return new Response(JSON.stringify(r.body ?? {}), {
-      status: r.status,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  });
-  return {
-    calls,
-    restore: () => {
-      globalThis.fetch = original;
-    },
-  };
+/**
+ * chrome.runtime.sendMessage をモック化する helper。
+ *
+ * - `bg-fetch` メッセージ: `bgFetchResponses` の順番に従ってレスポンスを返す
+ *   （末尾に到達したら最後のものを繰り返す）。`shouldThrow` フラグで例外も再現可。
+ * - その他のメッセージ（例: `fck:consent-refresh-required`）: `lastMsg` に
+ *   キャプチャして `undefined` を返す（no-op listener 想定）。
+ */
+interface FakeRuntimeState {
+  /** bg-fetch でない最後のメッセージ（consent-refresh 等）をキャプチャ */
+  lastNonBgFetchMsg: unknown;
+  /** bgFetch 呼び出しのリクエスト履歴（順序保持） */
+  bgFetchCalls: BackgroundFetchRequest[];
+  /** bgFetch のレスポンスシーケンス（呼び出し順に消費） */
+  bgFetchResponses: BackgroundFetchResponse[];
+  /** sendMessage 自体を throw させたい場合、true をセット */
+  sendMessageShouldThrow: boolean;
 }
 
-function installFakeChromeRuntime(): { lastMsg: unknown } {
-  const captured: { lastMsg: unknown } = { lastMsg: null };
+function installFakeChromeRuntime(): FakeRuntimeState {
+  const state: FakeRuntimeState = {
+    lastNonBgFetchMsg: null,
+    bgFetchCalls: [],
+    bgFetchResponses: [],
+    sendMessageShouldThrow: false,
+  };
+  let i = 0;
   const fake = {
     runtime: {
-      sendMessage: async (msg: unknown) => {
-        captured.lastMsg = msg;
+      sendMessage: async (msg: unknown): Promise<unknown> => {
+        if (state.sendMessageShouldThrow) {
+          throw new Error('sendMessage threw');
+        }
+        if (
+          typeof msg === 'object' &&
+          msg !== null &&
+          (msg as Partial<BackgroundFetchRequest>).type === 'fck:bg-fetch'
+        ) {
+          state.bgFetchCalls.push(msg as BackgroundFetchRequest);
+          if (state.bgFetchResponses.length === 0) {
+            return undefined; // 未設定 → no-response 扱い
+          }
+          const r = state.bgFetchResponses[Math.min(i, state.bgFetchResponses.length - 1)];
+          i += 1;
+          return r;
+        }
+        state.lastNonBgFetchMsg = msg;
+        return undefined;
       },
     },
   };
-  // @types/chrome の型に完全準拠させると 30 メソッド以上を埋める必要があるが、
-  // 本テストは runtime.sendMessage しか触らないので最小モックに double cast。
+  // @types/chrome 全モック化は煩雑なので最小実装で double cast
   (globalThis as unknown as { chrome: unknown }).chrome = fake;
-  return captured;
+  return state;
 }
 
 // ─── notifyConsent / notifyRevoke ────────────────────────────
 
 describe('notifyConsent', () => {
-  let restore: () => void = () => undefined;
-  afterEach(() => restore());
+  beforeEach(() => installFakeChromeRuntime());
 
   it('200: ConsentNotifyResponsePayload を返す', async () => {
-    const m = mockFetchSequence([
-      { status: 200, body: { recorded: true, currentConsentVersion: '2026-05-01' } },
-    ]);
-    restore = m.restore;
+    const state = installFakeChromeRuntime();
+    state.bgFetchResponses = [
+      {
+        ok: true,
+        status: 200,
+        json: { recorded: true, currentConsentVersion: '2026-05-01' },
+      },
+    ];
     const result = await notifyConsent(ctx, '2026-05-01');
     expect(result.recorded).toBe(true);
     expect(result.currentConsentVersion).toBe('2026-05-01');
-    expect(m.calls[0].url).toContain('/v1/consent');
-    const headers = m.calls[0].init?.headers as Record<string, string>;
-    expect(headers['x-fck-token']).toBe(ctx.token);
+    expect(state.bgFetchCalls[0].endpoint).toBe('consent');
+    expect(state.bgFetchCalls[0].token).toBe(ctx.token);
+    expect(state.bgFetchCalls[0].apiUrl).toBe(ctx.apiUrl);
   });
 
   it('422: ConsentApiError を投げ、status と body を保持する', async () => {
-    const m = mockFetchSequence([{ status: 422, body: { error: 'Unknown consentVersion' } }]);
-    restore = m.restore;
+    const state = installFakeChromeRuntime();
+    state.bgFetchResponses = [
+      { ok: true, status: 422, json: { error: 'Unknown consentVersion' } },
+    ];
     await expect(notifyConsent(ctx, '1999-01-01')).rejects.toBeInstanceOf(ConsentApiError);
   });
 
-  it('ネットワークエラー: 通常の Error を伝播（呼び出し側が retry 判断）', async () => {
-    const m = mockFetchSequence([{ status: 0, throwError: true }]);
-    restore = m.restore;
-    await expect(notifyConsent(ctx, 'v1')).rejects.toThrow(/network down/);
+  it('ネットワークエラー (ok:false, network): Error を伝播', async () => {
+    const state = installFakeChromeRuntime();
+    state.bgFetchResponses = [
+      { ok: false, kind: 'network', message: 'Failed to fetch' },
+    ];
+    await expect(notifyConsent(ctx, 'v1')).rejects.toThrow(/bg-fetch failed/);
+  });
+
+  it('invalid-origin: Error を伝播（apiUrl が改ざんされたケース）', async () => {
+    const state = installFakeChromeRuntime();
+    state.bgFetchResponses = [
+      { ok: false, kind: 'invalid-origin', message: 'apiUrl origin not in allowlist' },
+    ];
+    await expect(notifyConsent(ctx, 'v1')).rejects.toThrow(/invalid-origin/);
   });
 });
 
 describe('notifyRevoke', () => {
-  let restore: () => void = () => undefined;
-  afterEach(() => restore());
-
   it('200: RevokeResponsePayload を返す', async () => {
-    const m = mockFetchSequence([{ status: 200, body: { revoked: true, deletedLogCount: 7 } }]);
-    restore = m.restore;
+    const state = installFakeChromeRuntime();
+    state.bgFetchResponses = [
+      { ok: true, status: 200, json: { revoked: true, deletedLogCount: 7 } },
+    ];
     const result = await notifyRevoke(ctx);
     expect(result.revoked).toBe(true);
     expect(result.deletedLogCount).toBe(7);
-    expect(m.calls[0].url).toContain('/v1/revoke');
+    expect(state.bgFetchCalls[0].endpoint).toBe('revoke');
   });
 
   it('500 サーバーエラー時は ConsentApiError', async () => {
-    const m = mockFetchSequence([{ status: 500 }]);
-    restore = m.restore;
+    const state = installFakeChromeRuntime();
+    state.bgFetchResponses = [{ ok: true, status: 500, json: null }];
     await expect(notifyRevoke(ctx)).rejects.toBeInstanceOf(ConsentApiError);
   });
 });
@@ -160,67 +197,65 @@ describe('notifyRevoke', () => {
 // ─── IngestClient ────────────────────────────────────────────
 
 describe('IngestClient: enqueueLog', () => {
-  let restore: () => void = () => undefined;
   beforeEach(() => {
     installFakeChromeRuntime();
     vi.useFakeTimers();
   });
   afterEach(() => {
-    restore();
     vi.useRealTimers();
   });
 
   it('50 件未満ならタイマー予約のみ（即時 fetch しない）', async () => {
-    const m = mockFetchSequence([{ status: 200, body: { accepted: 1 } }]);
-    restore = m.restore;
+    const state = installFakeChromeRuntime();
+    state.bgFetchResponses = [
+      { ok: true, status: 200, json: { accepted: 1 } },
+    ];
     const client = new IngestClient(ctx);
     client.enqueueLog(makeLog(1));
-    expect(m.calls).toHaveLength(0);
+    expect(state.bgFetchCalls).toHaveLength(0);
     expect(client._bufferSize()).toBe(1);
   });
 
   it('50 件到達で即座にフラッシュ（タイマー待機なし）', async () => {
-    const m = mockFetchSequence([{ status: 200, body: { accepted: 50 } }]);
-    restore = m.restore;
+    const state = installFakeChromeRuntime();
+    state.bgFetchResponses = [
+      { ok: true, status: 200, json: { accepted: 50 } },
+    ];
     const client = new IngestClient(ctx);
     for (let i = 0; i < MAX_BATCH; i++) client.enqueueLog(makeLog(i));
-    // microtask を進めて flush() の await fetch 完了を待つ
     await vi.runAllTimersAsync();
-    expect(m.calls).toHaveLength(1);
+    expect(state.bgFetchCalls).toHaveLength(1);
     expect(client._bufferSize()).toBe(0);
-    const body = JSON.parse((m.calls[0].init?.body as string) ?? '{}');
+    const body = state.bgFetchCalls[0].body as { logs: unknown[] };
     expect(body.logs).toHaveLength(MAX_BATCH);
   });
 
   it('5 秒タイマーで自動フラッシュ', async () => {
-    const m = mockFetchSequence([{ status: 200 }]);
-    restore = m.restore;
+    const state = installFakeChromeRuntime();
+    state.bgFetchResponses = [
+      { ok: true, status: 200, json: null },
+    ];
     const client = new IngestClient(ctx);
     client.enqueueLog(makeLog(1));
-    expect(m.calls).toHaveLength(0);
+    expect(state.bgFetchCalls).toHaveLength(0);
 
     await vi.advanceTimersByTimeAsync(FLUSH_INTERVAL_MS);
-    expect(m.calls).toHaveLength(1);
+    expect(state.bgFetchCalls).toHaveLength(1);
     expect(client._bufferSize()).toBe(0);
   });
 });
 
 describe('IngestClient: response handling', () => {
-  let restore: () => void = () => undefined;
-  let runtime: { lastMsg: unknown };
-
   beforeEach(() => {
-    runtime = installFakeChromeRuntime();
     vi.useFakeTimers();
   });
   afterEach(() => {
-    restore();
     vi.useRealTimers();
   });
 
   it('200: 成功、バッファクリア、リトライカウント 0', async () => {
-    const m = mockFetchSequence([{ status: 200 }]);
-    restore = m.restore;
+    const state = installFakeChromeRuntime();
+    state.bgFetchResponses = [{ ok: true, status: 200, json: null }];
     const client = new IngestClient(ctx);
     client.enqueueLog(makeLog(1));
     await vi.advanceTimersByTimeAsync(FLUSH_INTERVAL_MS);
@@ -229,27 +264,30 @@ describe('IngestClient: response handling', () => {
   });
 
   it('410: バッチを破棄、popup に再同意通知を送る', async () => {
-    const m = mockFetchSequence([
+    const state = installFakeChromeRuntime();
+    state.bgFetchResponses = [
       {
+        ok: true,
         status: 410,
-        body: { error: 'consent_version_mismatch', currentConsentVersion: '2026-06-01' },
+        json: { error: 'consent_version_mismatch', currentConsentVersion: '2026-06-01' },
       },
-    ]);
-    restore = m.restore;
+    ];
     const client = new IngestClient(ctx);
     client.enqueueLog(makeLog(1));
     await vi.advanceTimersByTimeAsync(FLUSH_INTERVAL_MS);
 
     expect(client._bufferSize()).toBe(0);
-    expect(runtime.lastMsg).toMatchObject({
+    expect(state.lastNonBgFetchMsg).toMatchObject({
       type: 'fck:consent-refresh-required',
       currentConsentVersion: '2026-06-01',
     });
   });
 
   it('422: バリデーション失敗、再送せずバッファクリア', async () => {
-    const m = mockFetchSequence([{ status: 422, body: { error: 'logs[0]: bad' } }]);
-    restore = m.restore;
+    const state = installFakeChromeRuntime();
+    state.bgFetchResponses = [
+      { ok: true, status: 422, json: { error: 'logs[0]: bad' } },
+    ];
     const client = new IngestClient(ctx);
     client.enqueueLog(makeLog(1));
     await vi.advanceTimersByTimeAsync(FLUSH_INTERVAL_MS);
@@ -258,33 +296,31 @@ describe('IngestClient: response handling', () => {
   });
 
   it('429: バッファ復元 + 30 秒バックオフ後に再試行', async () => {
-    const m = mockFetchSequence([
-      { status: 429 },           // 1回目失敗
-      { status: 200 },           // 2回目成功
-    ]);
-    restore = m.restore;
+    const state = installFakeChromeRuntime();
+    state.bgFetchResponses = [
+      { ok: true, status: 429, json: null },
+      { ok: true, status: 200, json: null },
+    ];
     const client = new IngestClient(ctx);
     client.enqueueLog(makeLog(1));
 
-    // 1 回目: 5 秒タイマーで flush → 429 → バッファ復元 + 30 秒予約
     await vi.advanceTimersByTimeAsync(FLUSH_INTERVAL_MS);
-    expect(m.calls).toHaveLength(1);
+    expect(state.bgFetchCalls).toHaveLength(1);
     expect(client._bufferSize()).toBe(1);
     expect(client._retryCount()).toBe(1);
 
-    // 30 秒待機 → 2 回目 fetch
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(m.calls).toHaveLength(2);
+    expect(state.bgFetchCalls).toHaveLength(2);
     expect(client._bufferSize()).toBe(0);
     expect(client._retryCount()).toBe(0);
   });
 
-  it('ネットワークエラー: 429 と同じくバッファ復元 + リトライ', async () => {
-    const m = mockFetchSequence([
-      { status: 0, throwError: true },
-      { status: 200 },
-    ]);
-    restore = m.restore;
+  it('ネットワークエラー (ok:false, network): 429 と同じくリトライ', async () => {
+    const state = installFakeChromeRuntime();
+    state.bgFetchResponses = [
+      { ok: false, kind: 'network', message: 'network down' },
+      { ok: true, status: 200, json: null },
+    ];
     const client = new IngestClient(ctx);
     client.enqueueLog(makeLog(1));
 
@@ -292,60 +328,64 @@ describe('IngestClient: response handling', () => {
     expect(client._bufferSize()).toBe(1);
 
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(m.calls).toHaveLength(2);
+    expect(state.bgFetchCalls).toHaveLength(2);
     expect(client._bufferSize()).toBe(0);
   });
 
+  it('invalid-origin (ok:false): リトライしない、バッファクリア', async () => {
+    const state = installFakeChromeRuntime();
+    state.bgFetchResponses = [
+      { ok: false, kind: 'invalid-origin', message: 'origin not in allowlist' },
+    ];
+    const client = new IngestClient(ctx);
+    client.enqueueLog(makeLog(1));
+    await vi.advanceTimersByTimeAsync(FLUSH_INTERVAL_MS);
+    expect(client._bufferSize()).toBe(0);
+    expect(client._retryCount()).toBe(0);
+  });
+
   it('リトライ上限到達後は破棄', async () => {
-    // すべて 429 を返す
-    const m = mockFetchSequence([{ status: 429 }]);
-    restore = m.restore;
+    const state = installFakeChromeRuntime();
+    state.bgFetchResponses = [{ ok: true, status: 429, json: null }];
     const client = new IngestClient(ctx);
     client.enqueueLog(makeLog(1));
 
-    // 1 回目
     await vi.advanceTimersByTimeAsync(FLUSH_INTERVAL_MS);
-    // バックオフ × 3 回を消化
     await vi.advanceTimersByTimeAsync(30_000);
     await vi.advanceTimersByTimeAsync(30_000);
     await vi.advanceTimersByTimeAsync(30_000);
 
-    // 上限到達 → 破棄。リトライカウントは 0 にリセットされる
     expect(client._bufferSize()).toBe(0);
     expect(client._retryCount()).toBe(0);
   });
 
   it('バックオフ中は enqueue が 5 秒タイマーを立てず、二重送信を防ぐ', async () => {
-    const m = mockFetchSequence([
-      { status: 429 },          // 1回目失敗 → バックオフ開始
-      { status: 200 },          // バックオフ満了時の再送のみが許可される
-    ]);
-    restore = m.restore;
+    const state = installFakeChromeRuntime();
+    state.bgFetchResponses = [
+      { ok: true, status: 429, json: null },
+      { ok: true, status: 200, json: null },
+    ];
     const client = new IngestClient(ctx);
     client.enqueueLog(makeLog(1));
 
-    // 1 回目フラッシュ → 429 → バックオフ予約
     await vi.advanceTimersByTimeAsync(FLUSH_INTERVAL_MS);
-    expect(m.calls).toHaveLength(1);
+    expect(state.bgFetchCalls).toHaveLength(1);
 
-    // バックオフ中（30 秒経過前）に 5 件の追加 enqueue があっても
-    // 5 秒タイマーは立たず、新たな fetch は走らない
     for (let i = 2; i <= 6; i++) client.enqueueLog(makeLog(i));
     await vi.advanceTimersByTimeAsync(FLUSH_INTERVAL_MS);
     await vi.advanceTimersByTimeAsync(FLUSH_INTERVAL_MS);
-    expect(m.calls).toHaveLength(1); // まだ 1 回目だけ
+    expect(state.bgFetchCalls).toHaveLength(1);
 
-    // バックオフタイマー満了 → 残り 6 件まとめて再送
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(m.calls).toHaveLength(2);
+    expect(state.bgFetchCalls).toHaveLength(2);
     expect(client._bufferSize()).toBe(0);
-    const body = JSON.parse((m.calls[1].init?.body as string) ?? '{}');
+    const body = state.bgFetchCalls[1].body as { logs: unknown[] };
     expect(body.logs).toHaveLength(6);
   });
 
   it('abort: バッファクリア + タイマー解除（revoke 時に使う）', async () => {
-    const m = mockFetchSequence([{ status: 200 }]);
-    restore = m.restore;
+    const state = installFakeChromeRuntime();
+    state.bgFetchResponses = [{ ok: true, status: 200, json: null }];
     const client = new IngestClient(ctx);
     client.enqueueLog(makeLog(1));
     client.enqueueLog(makeLog(2));
@@ -354,8 +394,29 @@ describe('IngestClient: response handling', () => {
     client.abort();
     expect(client._bufferSize()).toBe(0);
 
-    // タイマー解除されているので fetch は呼ばれない
     await vi.advanceTimersByTimeAsync(FLUSH_INTERVAL_MS);
-    expect(m.calls).toHaveLength(0);
+    expect(state.bgFetchCalls).toHaveLength(0);
+  });
+
+  it('background が undefined を返す: network 扱いでリトライ', async () => {
+    const state = installFakeChromeRuntime();
+    // bgFetchResponses 空 → fake が undefined を返す
+    state.bgFetchResponses = [];
+    const client = new IngestClient(ctx);
+    client.enqueueLog(makeLog(1));
+    await vi.advanceTimersByTimeAsync(FLUSH_INTERVAL_MS);
+    // バッファ復元（リトライ予定）
+    expect(client._bufferSize()).toBe(1);
+    expect(client._retryCount()).toBe(1);
+  });
+
+  it('sendMessage 自体が throw: network 扱いでリトライ', async () => {
+    const state = installFakeChromeRuntime();
+    state.sendMessageShouldThrow = true;
+    const client = new IngestClient(ctx);
+    client.enqueueLog(makeLog(1));
+    await vi.advanceTimersByTimeAsync(FLUSH_INTERVAL_MS);
+    expect(client._bufferSize()).toBe(1);
+    expect(client._retryCount()).toBe(1);
   });
 });
