@@ -21,6 +21,7 @@ import {
   matchesGenreTemplate,
   matchesGenreKeywordForStage2,
   matchesGameplayHintForStage2,
+  isObviouslySafe,
 } from '@fresh-chat-keeper/judgment-engine/stage1';
 import type { GenreTemplate } from '@fresh-chat-keeper/knowledge-base';
 import { filterMessageElement, restoreMessageElement, switchDisplayMode, ATTR_FALSE_POSITIVE } from './chat-dom.js';
@@ -45,6 +46,11 @@ import {
   type JudgeCacheEntry,
 } from './chrome-cache.js';
 import { sendStage2Batch } from './filter-orchestrator.js';
+import {
+  initCollectionEmitter,
+  emitJudgmentLog,
+  shutdownCollectionEmitter,
+} from './collection-emit.js';
 
 /** YouTube チャットリプレイのメッセージコンテナ */
 const ITEMS_SELECTOR = '#items';
@@ -91,6 +97,9 @@ function shutdownOnInvalidContext(): void {
   itemsObserver?.disconnect();
   itemsObserver = null;
   clearStage2Queue();
+  // Phase 2.5: ingest バッファをフラッシュ（拡張更新前に直近のログを救う）。
+  // chrome.runtime が無効化されている場合 fetch も失敗するが try で保護される。
+  void shutdownCollectionEmitter();
 }
 
 // ─── モジュールスコープ状態 ───────────────────────────────────────────────────
@@ -138,10 +147,19 @@ let drainDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 /** 起動時に取得した匿名トークン */
 let anonToken = '';
 
+/** 現在のモード（archive / live）。ingest 時の judgmentMode に使う */
+let currentPageMode: 'archive_replay' | 'live' = 'archive_replay';
+
+/** 配信開始時刻（live モードのみ。archive は常に null） */
+let liveStartedAtMs: number | null = null;
+
 // ─── エントリポイント ─────────────────────────────────────────────────────────
 
 export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
   console.log(`[FreshChatKeeper] ${mode === 'live' ? 'ライブモード' : 'アーカイブモード'}で起動しました`);
+
+  currentPageMode = mode === 'live' ? 'live' : 'archive_replay';
+  liveStartedAtMs = mode === 'live' ? Date.now() : null;
 
   // 動画タイトルを取得（親フレームの document.title から "- YouTube" を除去）
   currentVideoTitle = getVideoTitle();
@@ -153,6 +171,12 @@ export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
   Promise.all([initStage2Cache(), getOrCreateAnonToken()])
     .then(([, token]) => {
       anonToken = token;
+      // Phase 2.5: collection-emit に正しい token を渡す。
+      // currentSettings が先に解決していれば apiUrl を、未解決なら DEFAULT を使う。
+      const apiUrl = currentSettings?.collectionApiUrl ?? '';
+      if (apiUrl) {
+        void initCollectionEmitter(apiUrl, anonToken);
+      }
     })
     .catch((err) => {
       // chrome.storage 失敗等。anonToken が空のままだと Stage 2 が動かないが、
@@ -164,6 +188,15 @@ export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
     .then((settings) => {
       currentSettings = settings;
       currentKeywords = buildKeywordsFromSettings(settings);
+
+      // Phase 2.5: opt-in している場合のみ collection-emit を起動。
+      // anonToken が空でも初期化は進める（あとから resolve した時点で
+      // initCollectionEmitter は再呼び出ししない設計だが、IngestClient は
+      // refreshClient() のタイミングで token を再評価するため問題ない）。
+      // ※anonToken の Promise が完了する前に initCollectionEmitter が走る
+      // 可能性があるため、Promise.all ブロック側でも initCollectionEmitter を
+      // 呼んで二段構えにする（後勝ち）。
+      void initCollectionEmitter(settings.collectionApiUrl, anonToken);
 
       chrome.storage.onChanged.addListener((changes, area) => {
         if (area !== 'local' || !changes[STORAGE_KEY]) return;
@@ -375,10 +408,28 @@ function processMessage(el: Element): void {
 
   if (revealedTexts.has(text)) return;
 
+  // ── 段階A 前駆体: 「明らかに無害」コメントは Stage 2 をスキップ ───────────────
+  // judgment-engine の isObviouslySafe（"草"/"www"/"888"/2文字以下）が真なら
+  // ネタバレフィルタは行わない（既存挙動: 何もしない）。
+  // Phase 2.5 で opt-in 中なら 'reaction' カテゴリでログを残す（§2.1, §4.4）。
+  if (isObviouslySafe(text)) {
+    emitJudgmentForElement(el, text, {
+      stageACategory: 'reaction',
+      labels: ['safe'],
+      primaryLabel: 'safe',
+      confidence: 1.0,
+      stage: 'stage1',
+      reasonJa: null,
+      labelSource: 'haiku',
+    });
+    return;
+  }
+
   // ── カスタムNGワード: 即時判定（ゲーム知識ベースと独立） ───────────────────────
   const customNgWords = currentSettings.customNgWords ?? [];
   const matchedNgWord = matchesCustomNGWord(text, customNgWords);
   if (matchedNgWord !== null) {
+    emitStage1SpoilerLog(el, text);
     applyFilter(el, text, matchedNgWord);
     return;
   }
@@ -386,6 +437,7 @@ function processMessage(el: Element): void {
   // ── ジャンルテンプレート: 即時判定（ゲーム知識ベースと独立） ──────────────────
   const matchedGenre = matchesGenreTemplate(text, currentGenreTemplates);
   if (matchedGenre !== null) {
+    emitStage1SpoilerLog(el, text);
     applyFilter(el, text, matchedGenre);
     return;
   }
@@ -394,6 +446,7 @@ function processMessage(el: Element): void {
   const matchResult = matchesKeyword(text, currentKeywords, currentDescriptionPhrases);
 
   if (matchResult !== null) {
+    emitStage1SpoilerLog(el, text);
     applyFilter(el, text, matchResult.keyword, matchResult.verb ?? matchResult.phrase);
     return;
   }
@@ -526,6 +579,61 @@ async function drainStage2Queue(): Promise<void> {
 }
 
 /**
+ * Phase 2.5: 1 件の判定を ingest クライアントに渡す。
+ *
+ * opt-in OFF のユーザーには collection-emit 側で no-op になるため
+ * ここでガード不要。stageACategory / labels 等は呼び出し側が決める。
+ */
+function emitJudgmentForElement(
+  el: Element,
+  text: string,
+  judgment: {
+    stageACategory: import('@fresh-chat-keeper/shared').StageACategory;
+    labels: import('@fresh-chat-keeper/shared').CollectionLabel[];
+    primaryLabel: import('@fresh-chat-keeper/shared').CollectionLabel;
+    confidence: number;
+    stage: 'stage1' | 'stage2';
+    reasonJa: string | null;
+    labelSource: import('@fresh-chat-keeper/shared').LabelSource;
+  },
+): void {
+  if (!currentSettings) return;
+
+  const videoId = getVideoIdFromUrl();
+  const channelId = getChannelIdFromDom();
+  const targetAuthorChannelId = getAuthorChannelIdFromElement(el);
+
+  // 必須フィールドが欠けている場合は emit を諦める（apps/api の 422 を避ける）
+  if (!videoId || !channelId || !targetAuthorChannelId) return;
+
+  emitJudgmentLog({
+    videoId,
+    channelId,
+    gameTitle:
+      currentSettings.gameId === 'none' || currentSettings.gameId === 'other'
+        ? null
+        : currentSettings.gameId,
+    timeIntoStream: currentPageMode === 'live' && liveStartedAtMs !== null
+      ? Math.floor((Date.now() - liveStartedAtMs) / 1000)
+      : null,
+    judgmentMode: currentPageMode,
+    targetBody: text,
+    targetAuthorChannelId,
+    targetTimestamp: new Date().toISOString(),
+    // archive モードなら直前 N 件、live は空配列（仕様書 §4.4）
+    precedingMessages:
+      currentPageMode === 'archive_replay' ? collectPrecedingMessages(el) : [],
+    stageACategory: judgment.stageACategory,
+    labels: judgment.labels,
+    primaryLabel: judgment.primaryLabel,
+    confidence: judgment.confidence,
+    stage: judgment.stage,
+    reasonJa: judgment.reasonJa,
+    labelSource: judgment.labelSource,
+  });
+}
+
+/**
  * Stage 2 判定結果を DOM に適用する。
  * - 'block' または 'uncertain' → フィルタ（安全側に倒す）
  * - 'allow' → 何もしない
@@ -541,6 +649,25 @@ function applyStage2Verdict(candidate: Stage2Candidate, entry: JudgeCacheEntry):
   }
   const el = candidate.el.deref();
   if (el) showPendingElement(el);
+
+  // Phase 2.5 ingest: stage 2 の判定結果は verdict に関わらず常に記録する
+  // （'allow' = 'safe' ラベル、'block' = 'spoiler' ラベル）。フィルタ後に
+  // emit すると el がフィルタ書き換え後で textContent が変わるので、
+  // フィルタ適用前にここで emit する。
+  if (el && el.textContent?.trim() === candidate.text) {
+    const isBlocked = entry.spoilerCategory === 'direct_spoiler'
+      || entry.spoilerCategory === 'foreshadowing_hint'
+      || entry.spoilerCategory === 'gameplay_hint';
+    emitJudgmentForElement(el, candidate.text, {
+      stageACategory: 'unknown',
+      labels: isBlocked ? ['spoiler'] : ['safe'],
+      primaryLabel: isBlocked ? 'spoiler' : 'safe',
+      confidence: entry.confidence ?? 1.0,
+      stage: 'stage2',
+      reasonJa: null,
+      labelSource: 'haiku',
+    });
+  }
 
   const verdict = verdictFromCache(entry, currentSettings.filterMode);
   if (verdict === 'allow') return;
@@ -604,6 +731,88 @@ function applyFilter(
     // processMessage のチェック直後にコンテキストが無効になった場合のレース条件ガード
     shutdownOnInvalidContext();
   }
+}
+
+// ─── Phase 2.5 ingest 補助 ─────────────────────────────────────────────────
+
+/** Stage 1 でブロックされたコメントを 'spoiler' ラベルで ingest 用に emit する */
+function emitStage1SpoilerLog(el: Element, text: string): void {
+  emitJudgmentForElement(el, text, {
+    stageACategory: 'unknown',
+    labels: ['spoiler'],
+    primaryLabel: 'spoiler',
+    confidence: 1.0,
+    stage: 'stage1',
+    reasonJa: null,
+    labelSource: 'haiku',
+  });
+}
+
+/** YouTube の親フレーム URL から videoId を抽出（取得不能なら空文字） */
+function getVideoIdFromUrl(): string {
+  try {
+    const url = new URL(window.parent?.location?.href ?? window.location.href);
+    return url.searchParams.get('v') ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * 親フレームの DOM から配信者の channel ID を抽出する。
+ *
+ * YouTube は `<link rel="canonical">` や `meta[itemprop="channelId"]` 等
+ * 複数経路で channelId を露出している。最も安定しているのは `ytd-watch-flexy`
+ * 周辺に置かれる `meta[itemprop="channelId"]` だが、レイアウト変更に弱い。
+ * 現状は最も単純な `<meta itemprop="channelId">` を試し、なければ空文字。
+ */
+function getChannelIdFromDom(): string {
+  try {
+    const doc = window.parent?.document;
+    if (!doc) return '';
+    const meta = doc.querySelector<HTMLMetaElement>('meta[itemprop="channelId"]');
+    return meta?.content ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * チャットメッセージ要素から投稿者の YouTube channel ID を抽出する。
+ *
+ * yt-live-chat-text-message-renderer は `data-author-external-channel-id`
+ * 属性を持つ（live / archive 共通）。取得不能なら空文字を返し、
+ * 呼び出し側（emitJudgmentForElement）が 422 回避のため emit を諦める。
+ */
+function getAuthorChannelIdFromElement(el: Element): string {
+  const renderer =
+    el.closest('yt-live-chat-text-message-renderer') ??
+    el.closest('yt-live-chat-paid-message-renderer');
+  if (!renderer) return '';
+  return renderer.getAttribute('data-author-external-channel-id') ?? '';
+}
+
+/**
+ * archive モードで現在の el の直前 N 件のメッセージを集める（最大 10）。
+ *
+ * VTuber 1B 互換構造に揃えるため { body, timestamp } の配列を返す。
+ * 投稿時刻は DOM から取得困難なため、現在時刻の `Date.now()` を - i*1000 ms
+ * のように最近順に逆算する。Phase 3+ で正確な timestamp 抽出（ライブ
+ * チャット renderer の data-timestamp 属性等）に差し替える。
+ */
+function collectPrecedingMessages(el: Element): import('@fresh-chat-keeper/shared').ContextMessage[] {
+  if (!itemsContainerRef) return [];
+  const allMsgs = Array.from(itemsContainerRef.querySelectorAll(MSG_TEXT_SELECTOR));
+  const idx = allMsgs.indexOf(el);
+  if (idx <= 0) return [];
+
+  const start = Math.max(0, idx - 10);
+  const slice = allMsgs.slice(start, idx);
+  const now = Date.now();
+  return slice.map((m, i) => ({
+    body: (m.textContent ?? '').trim(),
+    timestamp: new Date(now - (slice.length - i) * 1000).toISOString(),
+  }));
 }
 
 // ─── ユーティリティ ────────────────────────────────────────────────────────────
