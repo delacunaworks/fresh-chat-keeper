@@ -50,6 +50,12 @@ export type {
   GameContext,
 } from "./types/settings.js";
 
+export type {
+  BgFetchEndpoint,
+  BackgroundFetchRequest,
+  BackgroundFetchResponse,
+} from "./types/background-messaging.js";
+
 export { migrateSettings } from "./settings-migration.js";
 
 export { ok, err } from "./types/api.js";
