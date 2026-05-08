@@ -49,7 +49,7 @@ function Toggle({ checked, onChange }: { checked: boolean; onChange: (v: boolean
       onClick={() => onChange(!checked)}
       aria-checked={checked}
       role="switch"
-      className={`relative w-11 h-6 rounded-full transition-colors focus:outline-none ${
+      className={`relative w-11 h-6 rounded-full transition-colors focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-white focus:outline-none ${
         checked ? 'bg-white' : 'bg-indigo-400'
       }`}
     >
@@ -86,7 +86,7 @@ function SegmentedControl({
         <button
           key={opt.value}
           onClick={() => onChange(opt.value)}
-          className={`flex-1 py-1.5 transition-colors ${
+          className={`flex-1 py-1.5 transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500 focus:outline-none ${
             i > 0 ? 'border-l border-gray-200' : ''
           } ${
             value === opt.value
@@ -430,10 +430,12 @@ function CollectionSection({
         <button
           onClick={() => onToggle(!optedIn)}
           aria-checked={optedIn}
+          aria-label="データ収集に協力"
           role="switch"
           disabled={submitting || revoking}
-          className={`relative w-11 h-6 rounded-full transition-colors focus:outline-none ${
-            optedIn ? 'bg-indigo-600' : 'bg-gray-200'
+          className={`relative w-11 h-6 rounded-full transition-colors focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-indigo-500 focus:outline-none ${
+            // 未 opt-in 時は bg-gray-300（WCAG 1.4.11 で 3:1 を満たすコントラスト）
+            optedIn ? 'bg-indigo-600' : 'bg-gray-300'
           } ${submitting || revoking ? 'opacity-50 cursor-wait' : ''}`}
         >
           <span
@@ -453,7 +455,7 @@ function CollectionSection({
           <button
             onClick={() => void handleRevoke()}
             disabled={revoking}
-            className="mt-1 text-rose-600 underline disabled:text-gray-400"
+            className="mt-1 text-rose-600 underline disabled:text-gray-500 rounded focus-visible:ring-2 focus-visible:ring-rose-500 focus-visible:ring-offset-1 focus:outline-none"
           >
             {revoking ? '削除中...' : 'データ削除を申請'}
           </button>
