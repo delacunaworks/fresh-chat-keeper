@@ -159,7 +159,17 @@ export function CollectionConsentModal({
               プライバシーポリシー全文を読む
             </a>
           </section>
+        </div>
 
+        {/* チェックボックス + ボタン */}
+        <div className="border-t border-gray-100 px-4 py-3 space-y-2">
+          {/*
+            UX-01: エラーメッセージはボタン直上の固定フッター内に表示する。
+            scrollable 本体に置くと「同意して有効化」を押した直後のエラーが
+            視認範囲外（スクロールが下まで到達していない場合）に出るため、
+            ユーザーがボタン連打する UX バグを回避する。
+            role="alert" で SR 読み上げも維持。
+          */}
           {errorMessage && (
             <div
               role="alert"
@@ -168,10 +178,6 @@ export function CollectionConsentModal({
               {errorMessage}
             </div>
           )}
-        </div>
-
-        {/* チェックボックス + ボタン */}
-        <div className="border-t border-gray-100 px-4 py-3 space-y-2">
           <label className="flex items-start gap-2 text-xs text-gray-700">
             <input
               type="checkbox"
