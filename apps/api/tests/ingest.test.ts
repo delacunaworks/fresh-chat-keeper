@@ -139,7 +139,8 @@ function buildEnv(opts: {
       COLLECTION_DB: db,
       RATE_LIMIT_KV: rateLimitKv.kv,
       CONSENT_KV: consentKv.kv,
-      COLLECTION_SALT: 'test-salt',
+      COLLECTION_SALT: 'test-salt-must-be-long-enough',
+      ALLOWED_ORIGINS: 'http://localhost:8788,chrome-extension://test',
     },
     insertedLogs,
   };

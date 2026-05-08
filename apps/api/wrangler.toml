@@ -23,6 +23,17 @@ id = "3cb19ee1fcb34b83a296009474895862"
 binding = "CONSENT_KV"
 id = "30f59e56c01c473aab81dd2d08f5faf4"
 
-# 90 日 retention の cron trigger（B2 の retention.ts 実装後に有効化）
-# [triggers]
-# crons = ["0 3 * * *"]  # 毎日 03:00 UTC
+# CORS 許可 origin のカンマ区切りリスト。
+# Chrome Web Store 公開後の extension ID を本番デプロイ時に置き換える:
+#   ALLOWED_ORIGINS = "chrome-extension://<published-extension-id>"
+# ローカル開発時は dev セクション側で localhost を含めて上書きする。
+[vars]
+ALLOWED_ORIGINS = "chrome-extension://placeholder-replace-at-deploy"
+
+# ローカル開発時の上書き（`pnpm dev` / `wrangler dev` のみで使用）
+[env.dev.vars]
+ALLOWED_ORIGINS = "chrome-extension://localdevextensionidfortesting,http://localhost:5173,http://127.0.0.1:5173"
+
+# 毎日 03:00 UTC に retention cron 起動（B3 で有効化）
+[triggers]
+crons = ["0 3 * * *"]

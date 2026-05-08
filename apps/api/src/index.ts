@@ -19,10 +19,15 @@
 
 import { Hono } from 'hono';
 import type { Env } from './env.js';
+import { corsMiddleware } from './middleware/cors.js';
 import { ingestRouter } from './routes/ingest.js';
 import { revokeRouter } from './routes/revoke.js';
 
 const app = new Hono<{ Bindings: Env }>();
+
+// CORS は /v1/* だけに適用する。`GET /` ヘルスチェックは origin を見ずに
+// 200 を返す（モニタリング・uptime check は様々な経路から打たれるため）。
+app.use('/v1/*', corsMiddleware);
 
 app.get('/', (c) =>
   c.json({
