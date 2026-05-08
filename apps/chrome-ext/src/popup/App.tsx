@@ -5,6 +5,7 @@ import {
   FILTER_COUNT_KEY,
   STAGE2_USAGE_KEY,
   STAGE2_MONTHLY_LIMIT,
+  getOrCreateAnonToken,
   type FilterMode,
   type DisplayMode,
   type GameProgress,
@@ -13,6 +14,14 @@ import {
   type CustomNGWord,
 } from '../shared/settings.js';
 import { saveSettings } from '../shared/settings-loader.js';
+import {
+  getCollectionConsent,
+  saveCollectionConsent,
+  clearCollectionConsent,
+  type CollectionConsentState,
+} from '../shared/collection-state.js';
+import { notifyConsent, notifyRevoke, ConsentApiError } from '../content/collection-client.js';
+import { CollectionConsentModal } from './CollectionConsentModal.js';
 import type { KBGame } from '@fresh-chat-keeper/knowledge-base';
 import { getAllGenreTemplates } from '@fresh-chat-keeper/knowledge-base';
 import aceAttorney1 from '@kb-data/ace-attorney-1.json';
@@ -279,6 +288,195 @@ function ProgressSettings({
   );
 }
 
+// ─── データ収集セクション（Phase 2.5、opt-in） ────────────────────────
+
+/**
+ * データ収集 opt-in トグル + revoke UI。
+ *
+ * **プライバシー UX 要件**:
+ * - スイッチを ON にした瞬間にモーダル表示。モーダル承諾完了で初めて実反映
+ * - OFF にする前に確認ダイアログ。確認後 revoke API を呼ぶ
+ * - 同意中は consentVersion / 同意日時を表示
+ *
+ * 設定パネル本体（既存セクション群）の **下** に配置することで、
+ * 能動的に探した人だけが ON にする UX を実現する。
+ */
+function CollectionSection({
+  apiUrl,
+}: {
+  apiUrl: string;
+}) {
+  const [consent, setConsent] = useState<CollectionConsentState | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [revoking, setRevoking] = useState(false);
+  const [toast, setToast] = useState<string | null>(null);
+
+  // 起動時に opt-in 状態を読み込む
+  useEffect(() => {
+    void getCollectionConsent().then((state) => {
+      setConsent(state);
+      setLoaded(true);
+    });
+  }, []);
+
+  // chrome.storage.onChanged で opt-in 状態の変化に追従（content script 側
+  // からの変更や別タブでの変更を popup に反映）
+  useEffect(() => {
+    const listener = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      if (area !== 'local') return;
+      if (!changes['fck_collection_consent']) return;
+      const next = changes['fck_collection_consent'].newValue as CollectionConsentState | undefined;
+      setConsent(next ?? null);
+    };
+    chrome.storage.onChanged.addListener(listener);
+    return () => chrome.storage.onChanged.removeListener(listener);
+  }, []);
+
+  const optedIn = consent !== null;
+
+  const onToggle = (next: boolean) => {
+    if (next) {
+      // OFF → ON: モーダル表示。実反映はモーダル承諾完了で行う
+      setErrorMessage(null);
+      setModalOpen(true);
+    } else {
+      // ON → OFF: 確認後 revoke
+      const ok = window.confirm(
+        '過去 90 日のデータも当社サーバーから削除します。続けますか？',
+      );
+      if (ok) void handleRevoke();
+    }
+  };
+
+  const handleConsent = async (consentVersion: string) => {
+    setSubmitting(true);
+    setErrorMessage(null);
+    try {
+      const token = await getOrCreateAnonToken();
+      await notifyConsent({ apiUrl, token }, consentVersion);
+      const state: CollectionConsentState = {
+        optedIn: true,
+        consentVersion,
+        recordedAt: Date.now(),
+      };
+      await saveCollectionConsent(state);
+      setConsent(state);
+      setModalOpen(false);
+    } catch (err) {
+      if (err instanceof ConsentApiError && err.status === 422) {
+        setErrorMessage(
+          'ポリシーバージョンが古い可能性があります。拡張を最新版に更新してから再度お試しください。',
+        );
+      } else if (err instanceof ConsentApiError) {
+        setErrorMessage(`サーバーエラー (HTTP ${err.status})。時間を置いて再度お試しください。`);
+      } else {
+        setErrorMessage('ネットワークエラーが発生しました。接続を確認してから再度お試しください。');
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleCancel = () => {
+    if (submitting) return;
+    setModalOpen(false);
+    setErrorMessage(null);
+  };
+
+  const handleRevoke = async () => {
+    setRevoking(true);
+    try {
+      const token = await getOrCreateAnonToken();
+      const result = await notifyRevoke({ apiUrl, token });
+      await clearCollectionConsent();
+      setConsent(null);
+      const count = result.deletedLogCount ?? 0;
+      setToast(
+        count > 0
+          ? `データ収集を停止しました（${count} 件のログを削除）`
+          : 'データ収集を停止しました',
+      );
+      setTimeout(() => setToast(null), 4000);
+    } catch (err) {
+      // revoke 失敗時はローカル状態だけクリア（サーバー側は次回 retention で削除される）
+      // → ユーザーから見て「OFF にできた」状態にする方がプライバシー優位
+      await clearCollectionConsent();
+      setConsent(null);
+      const msg =
+        err instanceof Error ? err.message : String(err);
+      setToast(`データ削除のサーバー通知に失敗（ローカルは停止済み）: ${msg}`);
+      setTimeout(() => setToast(null), 5000);
+    } finally {
+      setRevoking(false);
+    }
+  };
+
+  if (!loaded) return null;
+
+  return (
+    <Section label="データ収集（任意）">
+      <div className="flex items-center justify-between">
+        <div className="flex-1 pr-2">
+          <div className="text-xs text-gray-700">
+            ネタバレ判定の改善に協力する
+          </div>
+          <p className="text-[10px] text-gray-400 mt-0.5 leading-snug">
+            匿名化したログを送信します。デフォルトはオフです。
+          </p>
+        </div>
+        <button
+          onClick={() => onToggle(!optedIn)}
+          aria-checked={optedIn}
+          role="switch"
+          disabled={submitting || revoking}
+          className={`relative w-11 h-6 rounded-full transition-colors focus:outline-none ${
+            optedIn ? 'bg-indigo-600' : 'bg-gray-200'
+          } ${submitting || revoking ? 'opacity-50 cursor-wait' : ''}`}
+        >
+          <span
+            className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full shadow transition-transform bg-white ${
+              optedIn ? 'translate-x-5' : 'translate-x-0'
+            }`}
+          />
+        </button>
+      </div>
+
+      {optedIn && consent && (
+        <div className="mt-2 text-[10px] text-gray-500 leading-snug space-y-0.5">
+          <div>同意バージョン: {consent.consentVersion}</div>
+          <div>
+            同意日時: {new Date(consent.recordedAt).toLocaleString('ja-JP', { hour12: false })}
+          </div>
+          <button
+            onClick={() => void handleRevoke()}
+            disabled={revoking}
+            className="mt-1 text-rose-600 underline disabled:text-gray-400"
+          >
+            {revoking ? '削除中...' : 'データ削除を申請'}
+          </button>
+        </div>
+      )}
+
+      {toast && (
+        <div className="mt-2 text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2 py-1">
+          {toast}
+        </div>
+      )}
+
+      <CollectionConsentModal
+        open={modalOpen}
+        submitting={submitting}
+        errorMessage={errorMessage}
+        onConsent={handleConsent}
+        onCancel={handleCancel}
+      />
+    </Section>
+  );
+}
+
 // ─── メインApp ────────────────────────────────────────────────────────
 
 export default function App() {
@@ -452,6 +650,14 @@ export default function App() {
           </p>
         </Section>
       </div>
+
+      {/*
+        Phase 2.5 データ収集 opt-in セクション。
+        既存設定パネルの下（フェード対象外）に置くことで、
+        - 拡張全体オフでも UI 操作可能（OFF にする道を残す）
+        - 能動的に探した人だけが ON にする UX を実現
+      */}
+      <CollectionSection apiUrl={settings.collectionApiUrl} />
 
     </div>
   );
