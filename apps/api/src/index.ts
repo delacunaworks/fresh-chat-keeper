@@ -1,39 +1,38 @@
 /**
  * Fresh Chat Keeper Collection API — Cloudflare Workers
  *
- * Phase 2.5（v0.3.5）でデータ収集インフラとして先行新設される統合API の雛形。
+ * Phase 2.5（v0.3.5）でデータ収集インフラとして先行新設される統合API。
  *
  * 役割（Phase 2.5 時点）:
- * - ingestion endpoint `POST /v1/ingest` で判定ログを D1 に蓄積（B2 で実装）
- * - 90 日 retention の cron trigger（B2 の retention.ts で実装）
+ * - POST /v1/ingest — opt-in したクライアントから判定ログを D1 に蓄積
+ * - POST /v1/revoke — 同意取り消し（consent_records.revoked_at 更新 +
+ *   judgment_logs の bulk delete）
+ * - GET / — ヘルスチェック
  *
  * Phase 6 で追加予定:
  * - YouTube OAuth、配信者プロフィール / broadcast 管理
  * - apps/proxy の段階的移行先となる judge endpoint
- *
- * 本ファイルは Hono ルーターのスケルトン。実エンドポイント実装は B2。
+ * - retention cron（B3 で実装、本ファイルには増設のみ）
  *
  * @see dev-docs/phase-2-5-data-collection.md §5
  */
 
 import { Hono } from 'hono';
 import type { Env } from './env.js';
+import { ingestRouter } from './routes/ingest.js';
+import { revokeRouter } from './routes/revoke.js';
 
 const app = new Hono<{ Bindings: Env }>();
 
-/**
- * ヘルスチェック用エンドポイント。
- * デプロイ動作確認・モニタリング用途。実体ロジックは持たない。
- */
 app.get('/', (c) =>
   c.json({
     name: 'fresh-chat-keeper-api',
     status: 'ok',
-    phase: '2.5-scaffold',
+    phase: '2.5',
   }),
 );
 
-// B2 で `routes/ingest.ts` 等を実装し、ここから `app.route('/v1', ingestRouter)`
-// で接続する。Phase 2.5 のスコープでは未実装。
+app.route('/v1', ingestRouter);
+app.route('/v1', revokeRouter);
 
 export default app;
