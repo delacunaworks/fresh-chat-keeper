@@ -22,6 +22,7 @@ import type { Env } from './env.js';
 import { corsMiddleware } from './middleware/cors.js';
 import { ingestRouter } from './routes/ingest.js';
 import { revokeRouter } from './routes/revoke.js';
+import { runRetention } from './db/retention.js';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -40,4 +41,23 @@ app.get('/', (c) =>
 app.route('/v1', ingestRouter);
 app.route('/v1', revokeRouter);
 
-export default app;
+/**
+ * Cloudflare Workers の cron trigger ハンドラ。wrangler.toml の
+ * `[triggers] crons = ["0 3 * * *"]` から毎日 03:00 UTC に呼ばれる。
+ *
+ * scheduled は default export の中で fetch と並列で公開する必要がある。
+ */
+export default {
+  fetch: app.fetch,
+  async scheduled(_event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    // waitUntil で retention の完了を待つ。例外は Cloudflare 側で
+    // 「scheduled task failed」として記録される。
+    ctx.waitUntil(
+      runRetention(env.COLLECTION_DB).catch((err) => {
+        console.error(
+          `[fck-api] retention failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }),
+    );
+  },
+};
