@@ -27,6 +27,39 @@ import type {
 
 // ─── 設定値 ────────────────────────────────────────────────────
 
+/**
+ * 許可される apps/api の origin（ハードコード）。
+ *
+ * **改ざん耐性のため env から読まずソースコードで固定する**。
+ * ユーザーが chrome.storage.local の collectionApiUrl を手動で書き換えても、
+ * このリストに含まれない origin にはリクエストを送らない。
+ *
+ * - 本番: fresh-chat-keeper-api.playnicelab.workers.dev（HTTPS のみ）
+ * - 開発: localhost:8788 / 127.0.0.1:8788（wrangler dev デフォルト）
+ *
+ * DEPLOY-01 後に本番 origin が確定したらここを更新する。
+ */
+export const ALLOWED_API_ORIGINS: readonly string[] = [
+  'https://fresh-chat-keeper-api.playnicelab.workers.dev',
+  'http://localhost:8788',
+  'http://127.0.0.1:8788',
+];
+
+/**
+ * apiUrl が許可リストに含まれるかを判定する。
+ *
+ * 失敗ケース（unknown / 不正な URL）は false を返し、呼び出し側が IngestClient
+ * を起動しないことで「変な URL に判定ログを送らない」を保証する。
+ */
+export function isAllowedApiOrigin(apiUrl: string): boolean {
+  try {
+    const origin = new URL(apiUrl).origin;
+    return ALLOWED_API_ORIGINS.includes(origin);
+  } catch {
+    return false;
+  }
+}
+
 /** 1 リクエストあたりの最大ログ件数（apps/api 側 MAX_BATCH と一致） */
 export const MAX_BATCH = 50;
 

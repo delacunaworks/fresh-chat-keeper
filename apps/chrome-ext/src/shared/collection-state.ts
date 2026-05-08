@@ -68,8 +68,10 @@ export async function clearCollectionConsent(): Promise<void> {
  *
  * 過去のストレージ汚染や手動編集に対する防御。一つでも欠けていたら null 扱い
  * （未同意）に倒すことで「同意状態が壊れていたら fail-closed」を保証する。
+ *
+ * collection-emit からも import して使う（B5 で重複定義を一本化）。
  */
-function isValidConsentState(raw: unknown): raw is CollectionConsentState {
+export function isValidConsentState(raw: unknown): raw is CollectionConsentState {
   if (typeof raw !== 'object' || raw === null) return false;
   const r = raw as Record<string, unknown>;
   return (

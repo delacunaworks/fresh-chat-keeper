@@ -20,9 +20,10 @@ import type {
 import {
   COLLECTION_CONSENT_KEY,
   getCollectionConsent,
+  isValidConsentState,
   type CollectionConsentState,
 } from '../shared/collection-state.js';
-import { IngestClient } from './collection-client.js';
+import { IngestClient, isAllowedApiOrigin } from './collection-client.js';
 import { buildJudgmentLog } from './collection-log-builder.js';
 
 /** 1 件の判定を ingest にフィードするための最小 input */
@@ -82,6 +83,21 @@ export async function initCollectionEmitter(
   apiUrl: string,
   token: string,
 ): Promise<void> {
+  // ホワイトリスト検証: 許可されていない origin への送信は無効化（改ざん対策）
+  // 設定が壊れている / ユーザーが手動編集した不審な URL を弾く。
+  if (!isAllowedApiOrigin(apiUrl)) {
+    console.warn(
+      `[FreshChatKeeper] collection api url not in allowlist (got origin "${
+        safeOrigin(apiUrl)
+      }"), data collection disabled`,
+    );
+    cachedApiUrl = null;
+    cachedToken = null;
+    consentState = null;
+    refreshClient();
+    return;
+  }
+
   cachedApiUrl = apiUrl;
   cachedToken = token;
 
@@ -94,7 +110,7 @@ export async function initCollectionEmitter(
     if (area !== 'local') return;
     if (!changes[COLLECTION_CONSENT_KEY]) return;
     const next = changes[COLLECTION_CONSENT_KEY].newValue as CollectionConsentState | undefined;
-    consentState = isValidState(next) ? next : null;
+    consentState = isValidConsentState(next) ? next : null;
     refreshClient();
   });
 }
@@ -158,14 +174,13 @@ function refreshClient(): void {
   }
 }
 
-function isValidState(raw: unknown): raw is CollectionConsentState {
-  if (typeof raw !== 'object' || raw === null) return false;
-  const r = raw as Record<string, unknown>;
-  return (
-    r.optedIn === true &&
-    typeof r.consentVersion === 'string' &&
-    typeof r.recordedAt === 'number'
-  );
+/** ログ出力用に origin だけ取り出す。不正 URL は文字列化してそのまま含める */
+function safeOrigin(url: string): string {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return String(url).slice(0, 60);
+  }
 }
 
 // ─── テスト用エクスポート ─────────────────────────────────────
