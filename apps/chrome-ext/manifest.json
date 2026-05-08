@@ -13,7 +13,9 @@
   "host_permissions": [
     "*://www.youtube.com/*",
     "https://fresh-chat-keeper-proxy.playnicelab.workers.dev/*",
-    "https://fresh-chat-keeper-api.playnicelab.workers.dev/*"
+    "https://fresh-chat-keeper-api.playnicelab.workers.dev/*",
+    "http://localhost:8788/*",
+    "http://127.0.0.1:8788/*"
   ],
   "background": {
     "service_worker": "background.js"
