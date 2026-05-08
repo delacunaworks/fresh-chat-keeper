@@ -20,7 +20,12 @@ import {
   clearCollectionConsent,
   type CollectionConsentState,
 } from '../shared/collection-state.js';
-import { notifyConsent, notifyRevoke, ConsentApiError } from '../content/collection-client.js';
+import {
+  notifyConsent,
+  notifyRevoke,
+  ConsentApiError,
+  type ConsentRefreshMessage,
+} from '../content/collection-client.js';
 import { CollectionConsentModal } from './CollectionConsentModal.js';
 import type { KBGame } from '@fresh-chat-keeper/knowledge-base';
 import { getAllGenreTemplates } from '@fresh-chat-keeper/knowledge-base';
@@ -333,6 +338,25 @@ function CollectionSection({
     };
     chrome.storage.onChanged.addListener(listener);
     return () => chrome.storage.onChanged.removeListener(listener);
+  }, []);
+
+  // chrome.runtime.onMessage で content script からの通知を受信。
+  // IngestClient が 410 (consent_version_mismatch) を受け取ると本通知を発火するため、
+  // popup を開いている間に再同意モーダルを自動で表示する（Phase 2.5 B5 / C-1）。
+  useEffect(() => {
+    const listener = (msg: unknown): void => {
+      if (typeof msg !== 'object' || msg === null) return;
+      const m = msg as Partial<ConsentRefreshMessage>;
+      if (m.type !== 'fck:consent-refresh-required') return;
+      // 表示のみ更新。consent state はサーバー側で revoked 扱いではないので
+      // クライアント側で勝手に消さず、ユーザーに再同意 UI を見せる。
+      setErrorMessage(
+        'サーバーで同意ポリシーが更新されました。再度同意してください。',
+      );
+      setModalOpen(true);
+    };
+    chrome.runtime.onMessage.addListener(listener);
+    return () => chrome.runtime.onMessage.removeListener(listener);
   }, []);
 
   const optedIn = consent !== null;

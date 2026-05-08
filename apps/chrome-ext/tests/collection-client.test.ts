@@ -315,6 +315,34 @@ describe('IngestClient: response handling', () => {
     expect(client._retryCount()).toBe(0);
   });
 
+  it('バックオフ中は enqueue が 5 秒タイマーを立てず、二重送信を防ぐ', async () => {
+    const m = mockFetchSequence([
+      { status: 429 },          // 1回目失敗 → バックオフ開始
+      { status: 200 },          // バックオフ満了時の再送のみが許可される
+    ]);
+    restore = m.restore;
+    const client = new IngestClient(ctx);
+    client.enqueueLog(makeLog(1));
+
+    // 1 回目フラッシュ → 429 → バックオフ予約
+    await vi.advanceTimersByTimeAsync(FLUSH_INTERVAL_MS);
+    expect(m.calls).toHaveLength(1);
+
+    // バックオフ中（30 秒経過前）に 5 件の追加 enqueue があっても
+    // 5 秒タイマーは立たず、新たな fetch は走らない
+    for (let i = 2; i <= 6; i++) client.enqueueLog(makeLog(i));
+    await vi.advanceTimersByTimeAsync(FLUSH_INTERVAL_MS);
+    await vi.advanceTimersByTimeAsync(FLUSH_INTERVAL_MS);
+    expect(m.calls).toHaveLength(1); // まだ 1 回目だけ
+
+    // バックオフタイマー満了 → 残り 6 件まとめて再送
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(m.calls).toHaveLength(2);
+    expect(client._bufferSize()).toBe(0);
+    const body = JSON.parse((m.calls[1].init?.body as string) ?? '{}');
+    expect(body.logs).toHaveLength(6);
+  });
+
   it('abort: バッファクリア + タイマー解除（revoke 時に使う）', async () => {
     const m = mockFetchSequence([{ status: 200 }]);
     restore = m.restore;

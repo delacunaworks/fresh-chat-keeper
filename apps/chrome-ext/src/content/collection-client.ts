@@ -158,8 +158,18 @@ export async function notifyRevoke(
 export class IngestClient {
   private buffer: SpoilerJudgmentLog[] = [];
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  private backoffTimer: ReturnType<typeof setTimeout> | null = null;
   private isFlushing = false;
   private retryCount = 0;
+  /**
+   * バックオフ待機中フラグ。true の間は 5 秒タイマーや 50 件到達による
+   * 即フラッシュを抑止し、バックオフタイマーの満了に統一する。
+   *
+   * **B5 review C-2 で導入**: バックオフ中に enqueueLog が走ると 5 秒
+   * タイマーが立ち、その後 30 秒バックオフタイマーも発火し、両方が
+   * 短期間に flush() を呼ぶ二重送信に近い挙動が発生していた。
+   */
+  private inBackoff = false;
   /** 410 で sendMessage 済みフラグ。多重通知を抑止 */
   private consentRefreshNotified = false;
 
@@ -168,6 +178,9 @@ export class IngestClient {
   /** バッファにログを追加。50 件到達で即フラッシュ、それ未満なら 5 秒タイマー予約。 */
   enqueueLog(log: SpoilerJudgmentLog): void {
     this.buffer.push(log);
+    // バックオフ中は 5 秒タイマーも 50 件即フラッシュも抑止する。
+    // バックオフ満了時の flush でまとめて処理される（または上限到達で破棄）。
+    if (this.inBackoff) return;
     if (this.buffer.length >= MAX_BATCH) {
       void this.flush();
       return;
@@ -178,6 +191,10 @@ export class IngestClient {
   /** 強制フラッシュ。revoke 時 / 拡張シャットダウン時に呼ぶ。 */
   async flush(): Promise<void> {
     if (this.isFlushing) return;
+    // バックオフ中は外部からの flush 呼び出しを抑止し、
+    // バックオフタイマー経由の flush だけが内部から走るようにする
+    // （flush 内で `this.inBackoff = false` してから sendBatch する）
+    if (this.inBackoff) return;
     if (this.buffer.length === 0) return;
 
     if (this.flushTimer !== null) {
@@ -195,8 +212,13 @@ export class IngestClient {
           this.retryCount += 1;
           // バッファ先頭に戻して次回フラッシュで再試行
           this.buffer.unshift(...batch);
-          // バックオフ後に再フラッシュ予約
-          setTimeout(() => void this.flush(), RETRY_BACKOFF_MS);
+          // バックオフ予約。inBackoff フラグで他の flush 経路を抑止。
+          this.inBackoff = true;
+          this.backoffTimer = setTimeout(() => {
+            this.backoffTimer = null;
+            this.inBackoff = false;
+            void this.flush();
+          }, RETRY_BACKOFF_MS);
         } else {
           // 上限到達: 諦めて破棄（ログのみ残す）
           console.warn(
@@ -210,8 +232,8 @@ export class IngestClient {
       }
     } finally {
       this.isFlushing = false;
-      // バッファに残りがあれば次回フラッシュを予約
-      if (this.buffer.length > 0) this.scheduleFlush();
+      // バッファに残りがあれば次回フラッシュを予約（バックオフ中は抑止される）
+      if (!this.inBackoff && this.buffer.length > 0) this.scheduleFlush();
     }
   }
 
@@ -226,6 +248,11 @@ export class IngestClient {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
     }
+    if (this.backoffTimer !== null) {
+      clearTimeout(this.backoffTimer);
+      this.backoffTimer = null;
+    }
+    this.inBackoff = false;
     this.retryCount = 0;
   }
 
