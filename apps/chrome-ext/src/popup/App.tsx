@@ -27,6 +27,7 @@ import {
   type ConsentRefreshMessage,
 } from '../content/collection-client.js';
 import { CollectionConsentModal } from './CollectionConsentModal.js';
+import { CollectionRevokeConfirmModal } from './CollectionRevokeConfirmModal.js';
 import type { KBGame } from '@fresh-chat-keeper/knowledge-base';
 import { getAllGenreTemplates } from '@fresh-chat-keeper/knowledge-base';
 import aceAttorney1 from '@kb-data/ace-attorney-1.json';
@@ -317,6 +318,7 @@ function CollectionSection({
   const [submitting, setSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [revoking, setRevoking] = useState(false);
+  const [revokeConfirmOpen, setRevokeConfirmOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
   // 起動時に opt-in 状態を読み込む
@@ -367,12 +369,15 @@ function CollectionSection({
       setErrorMessage(null);
       setModalOpen(true);
     } else {
-      // ON → OFF: 確認後 revoke
-      const ok = window.confirm(
-        '過去 90 日のデータも当社サーバーから削除します。続けますか？',
-      );
-      if (ok) void handleRevoke();
+      // ON → OFF: 確認モーダル表示（window.confirm は a11y / focus を破壊するため
+      // CollectionRevokeConfirmModal に置き換え、B5 review C-4）
+      setRevokeConfirmOpen(true);
     }
+  };
+
+  const handleRevokeConfirm = async (): Promise<void> => {
+    setRevokeConfirmOpen(false);
+    await handleRevoke();
   };
 
   const handleConsent = async (consentVersion: string) => {
@@ -477,7 +482,7 @@ function CollectionSection({
             同意日時: {new Date(consent.recordedAt).toLocaleString('ja-JP', { hour12: false })}
           </div>
           <button
-            onClick={() => void handleRevoke()}
+            onClick={() => setRevokeConfirmOpen(true)}
             disabled={revoking}
             className="mt-1 text-rose-600 underline disabled:text-gray-500 rounded focus-visible:ring-2 focus-visible:ring-rose-500 focus-visible:ring-offset-1 focus:outline-none"
           >
@@ -498,6 +503,13 @@ function CollectionSection({
         errorMessage={errorMessage}
         onConsent={handleConsent}
         onCancel={handleCancel}
+      />
+
+      <CollectionRevokeConfirmModal
+        open={revokeConfirmOpen}
+        submitting={revoking}
+        onConfirm={handleRevokeConfirm}
+        onCancel={() => setRevokeConfirmOpen(false)}
       />
     </Section>
   );
