@@ -154,6 +154,33 @@ let currentPageMode: 'archive_replay' | 'live' = 'archive_replay';
 /** 配信開始時刻（live モードのみ。archive は常に null） */
 let liveStartedAtMs: number | null = null;
 
+/**
+ * emit スキップの warn を 1 度だけ出すためのフラグ。
+ * YouTube DOM 構造変更で必須フィールドが取れなくなった際、ログ氾濫を避けつつ
+ * 早期検出できるようにする（タブごとに 1 回）。
+ */
+let emitSkipWarned = false;
+
+/**
+ * 必須フィールドが欠けて emit を諦めた際、原因を 1 度だけ warn 出力する。
+ * production でも有効（ユーザー環境での DOM 変更検出のため）。
+ */
+function warnEmitSkipOnce(fields: {
+  videoId: string;
+  channelId: string;
+  targetAuthorChannelId: string;
+}): void {
+  if (emitSkipWarned) return;
+  emitSkipWarned = true;
+  const missing = Object.entries(fields)
+    .filter(([, v]) => !v)
+    .map(([k]) => k);
+  console.warn(
+    `[FreshChatKeeper] ingest emit skipped: missing DOM fields [${missing.join(', ')}]. ` +
+      `YouTube の DOM 構造が変わった可能性があります。`,
+  );
+}
+
 // ─── エントリポイント ─────────────────────────────────────────────────────────
 
 export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
@@ -604,8 +631,13 @@ function emitJudgmentForElement(
   const channelId = getChannelIdFromDom();
   const targetAuthorChannelId = getAuthorChannelIdFromElement(el);
 
-  // 必須フィールドが欠けている場合は emit を諦める（apps/api の 422 を避ける）
-  if (!videoId || !channelId || !targetAuthorChannelId) return;
+  // 必須フィールドが欠けている場合は emit を諦める（apps/api の 422 を避ける）。
+  // サイレント失敗を避けるため、欠けたフィールドを warn で 1 度だけ通知する
+  // （DOM 構造変更の早期検出用、production でも有効）。
+  if (!videoId || !channelId || !targetAuthorChannelId) {
+    warnEmitSkipOnce({ videoId, channelId, targetAuthorChannelId });
+    return;
+  }
 
   emitJudgmentLog({
     videoId,
@@ -818,35 +850,169 @@ function getVideoIdFromUrl(): string {
 /**
  * 親フレームの DOM から配信者の channel ID を抽出する。
  *
- * YouTube は `<link rel="canonical">` や `meta[itemprop="channelId"]` 等
- * 複数経路で channelId を露出している。最も安定しているのは `ytd-watch-flexy`
- * 周辺に置かれる `meta[itemprop="channelId"]` だが、レイアウト変更に弱い。
- * 現状は最も単純な `<meta itemprop="channelId">` を試し、なければ空文字。
+ * YouTube の DOM は SPA レンダリング + Lit/Polymer Components で頻繁に
+ * 構造が変わる。2026-05 時点では `meta[itemprop="channelId"]` も
+ * `ytd-channel-name a` も親 document からは取れず、唯一安定して取れるのは
+ * 親ページ全体に散らばる `<a href*="/channel/UC...">` の集合のみ。
+ *
+ * 配信者の channel ID は「join / videos / about など複数のサブパスへの
+ * リンクが同じ UC ID を指す」性質を利用し、**親ページ内で最頻出の UC ID** を
+ * 配信者と判定する。これは関連動画やコメンター等の単発リンクに紛れない
+ * 堅牢な戦略。
+ *
+ * 失敗時は空文字を返す（呼び出し側で emit を諦める）。
  */
 function getChannelIdFromDom(): string {
   try {
     const doc = window.parent?.document;
     if (!doc) return '';
+
+    // 1. meta itemprop（旧 schema.org、現状は出ない）
     const meta = doc.querySelector<HTMLMetaElement>('meta[itemprop="channelId"]');
-    return meta?.content ?? '';
+    if (meta?.content) return meta.content;
+
+    // 2. ytd-channel-name の anchor（旧レイアウト互換）
+    const channelLink = doc.querySelector<HTMLAnchorElement>(
+      'ytd-channel-name a[href*="/channel/"]',
+    );
+    const fromChannelName = extractChannelIdFromHref(channelLink?.href);
+    if (fromChannelName) return fromChannelName;
+
+    // 3. #owner-text の anchor（モバイル/旧レイアウト）
+    const ownerLink = doc.querySelector<HTMLAnchorElement>(
+      '#owner-text a[href*="/channel/"], #owner a[href*="/channel/"]',
+    );
+    const fromOwner = extractChannelIdFromHref(ownerLink?.href);
+    if (fromOwner) return fromOwner;
+
+    // 4. 最頻出戦略: 親ページ全体の /channel/UC... リンクから最頻出 ID を返す。
+    //    配信者は join / videos / about など複数のサブパスを持つため、自然と
+    //    最頻出になる。関連動画リンク等は通常 1 件なので紛れない。
+    return findMostFrequentChannelId(doc);
   } catch {
     return '';
   }
 }
 
 /**
- * チャットメッセージ要素から投稿者の YouTube channel ID を抽出する。
+ * チャットメッセージ要素から投稿者の識別子を抽出する。
  *
- * yt-live-chat-text-message-renderer は `data-author-external-channel-id`
- * 属性を持つ（live / archive 共通）。取得不能なら空文字を返し、
- * 呼び出し側（emitJudgmentForElement）が 422 回避のため emit を諦める。
+ * **2026-05 時点の仕様変更（重要）**:
+ * YouTube は live chat replay の DOM から `authorExternalChannelId`（UC...）を
+ * **完全に削除した**（プライバシー強化と推察）。HTML 属性・Polymer 内部状態
+ * （`__data` / `_data` / `properties`）・shadowRoot・iframe globals
+ * （`ytInitialData` 等）すべてに UC ID は存在しない。
+ *
+ * 唯一安定して取れるのは `#author-name` 内の **ハンドル名**
+ * （`@rm-yw4ep` のような表示名）。これを識別子として採用する。
+ *
+ * **データ収集への影響**: フィールド名 `targetAuthorChannelId` は維持
+ * （スキーマ互換性のため）、value がハンドル文字列になる。SHA-1 ハッシュ
+ * 化ロジックも変更不要（input 文字列が変わるだけ）。同一動画内のユーザー
+ * 一貫性は保たれるため、Phase 2.5 のデータ品質は十分保たれる。
+ *
+ * UC ID を復活させるには Phase 3+ で `fetch` 傍受による Innertube API
+ * レスポンス解析が必要（dev-docs/phase-3-multilabel.md 参照予定）。
+ *
+ * フォールバック chain（保険として旧経路も残す）:
+ *
+ *   1. `data-author-external-channel-id` — 旧属性（過去 YouTube 互換）
+ *   2. `author-external-channel-id` — data- prefix なし（過去 YouTube 互換）
+ *   3. `renderer.data.authorExternalChannelId` — Polymer JS プロパティ（過去）
+ *   4. renderer 内の `a[href*="/channel/"]` から抽出（過去）
+ *   5. **`#author-name` の textContent**（現行 2026-05、ハンドル名）
+ *
+ * すべて失敗時は空文字を返す。
  */
 function getAuthorChannelIdFromElement(el: Element): string {
   const renderer =
     el.closest('yt-live-chat-text-message-renderer') ??
     el.closest('yt-live-chat-paid-message-renderer');
   if (!renderer) return '';
-  return renderer.getAttribute('data-author-external-channel-id') ?? '';
+
+  // 1. data- prefix 付き
+  const dataAttr = renderer.getAttribute('data-author-external-channel-id');
+  if (dataAttr) return dataAttr;
+
+  // 2. data- prefix なし
+  const plainAttr = renderer.getAttribute('author-external-channel-id');
+  if (plainAttr) return plainAttr;
+
+  // 3. Polymer data property
+  const polymerData = (renderer as unknown as {
+    data?: { authorExternalChannelId?: unknown };
+  }).data;
+  const fromPolymer = polymerData?.authorExternalChannelId;
+  if (typeof fromPolymer === 'string' && fromPolymer.length > 0) return fromPolymer;
+
+  // 4. renderer 内の anchor の href から抽出
+  const authorLink = renderer.querySelector<HTMLAnchorElement>('a[href*="/channel/"]');
+  const fromHref = extractChannelIdFromHref(authorLink?.href);
+  if (fromHref) return fromHref;
+
+  // 5. **現行 YouTube（2026-05）**: ハンドル名を使用。
+  //    `#author-name` の textContent から、付随する子要素のテキストを除外して
+  //    ハンドル本体だけを取り出す（badge 等のネスト要素のテキストが混入する
+  //    のを避けるため、子要素を一旦無視して直接の textNode のみを連結）。
+  const authorNameEl = renderer.querySelector('#author-name');
+  if (authorNameEl) {
+    const handle = extractDirectText(authorNameEl).trim();
+    // ハンドルは @ で始まる場合が多いが、任意の表示名（チャンネル名）の場合もある。
+    // 空でなければ採用する。同一動画内では同じ値を返すため、ユーザー一貫性 OK。
+    if (handle) return handle;
+  }
+
+  return '';
+}
+
+/**
+ * 要素の直下の textNode のテキストだけを連結する（子要素のテキストは除外）。
+ *
+ * `<span id="author-name"><span id="prepend-chat-badges"></span>@rm-yw4ep<span id="chip-badges"></span></span>`
+ * から `@rm-yw4ep` だけを取り出す用途。
+ */
+function extractDirectText(el: Element): string {
+  let text = '';
+  for (const node of Array.from(el.childNodes)) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      text += node.textContent ?? '';
+    }
+  }
+  return text;
+}
+
+/**
+ * `/channel/UCxxxxx...` を含む href から channelId 部分（UCxxxxx）を取り出す。
+ * マッチしなければ空文字。UC で始まり [A-Za-z0-9_-] が続く YouTube channelId 形式。
+ */
+function extractChannelIdFromHref(href: string | undefined | null): string {
+  if (!href) return '';
+  const match = href.match(/\/channel\/(UC[A-Za-z0-9_-]+)/);
+  return match?.[1] ?? '';
+}
+
+/**
+ * 親ページ内の `/channel/UC...` リンクから最頻出 channelId を返す。
+ *
+ * 配信者は join / videos / about / membership 等の複数サブパスを持つため、
+ * 自然と最頻出になる。関連動画やコメンターのリンクは通常 1 件で紛れない。
+ *
+ * 同数 1 位が複数ある場合は最初に見つかったものを返す。リンクが 1 つもなければ
+ * 空文字。
+ */
+function findMostFrequentChannelId(doc: Document): string {
+  const links = doc.querySelectorAll<HTMLAnchorElement>('a[href*="/channel/"]');
+  const counts = new Map<string, number>();
+  for (const link of Array.from(links)) {
+    const id = extractChannelIdFromHref(link.href);
+    if (!id) continue;
+    counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  let best: { id: string; count: number } | null = null;
+  for (const [id, count] of counts) {
+    if (best === null || count > best.count) best = { id, count };
+  }
+  return best?.id ?? '';
 }
 
 /**
