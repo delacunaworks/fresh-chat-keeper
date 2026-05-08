@@ -16,6 +16,7 @@ import type {
   ContextMessage,
   LabelSource,
   StageACategory,
+  UserFeedbackPayload,
 } from '@fresh-chat-keeper/shared';
 import {
   COLLECTION_CONSENT_KEY,
@@ -147,6 +148,51 @@ export function emitJudgmentLog(input: EmitJudgmentInput): void {
   });
 
   client.enqueueLog(log);
+}
+
+/**
+ * 誤判定報告（Phase 2.5 EXT-04）を ingest 経由で送信する。
+ *
+ * 通常の Stage 1/2 emit と異なり:
+ * - labelSource = 'user_report'
+ * - userFeedback フィールドを埋める（reportedAt / correctLabel 等）
+ * - 戻り値で生成された logId を返す（呼び出し側で MisreportEntry.syncedLogId に保存）
+ *
+ * @returns 生成された logId（opt-in 中で enqueue 成功時）/ null（opt-out 時）
+ */
+export function emitMisreportLog(
+  input: EmitJudgmentInput,
+  userFeedback: UserFeedbackPayload,
+): string | null {
+  if (consentState === null || client === null) return null;
+
+  const logId = crypto.randomUUID();
+  const log = buildJudgmentLog({
+    logId,
+    consentVersion: consentState.consentVersion,
+    videoId: input.videoId,
+    channelId: input.channelId,
+    gameTitle: input.gameTitle,
+    timeIntoStream: input.timeIntoStream,
+    judgmentMode: input.judgmentMode,
+    targetBody: input.targetBody,
+    targetAuthorChannelId: input.targetAuthorChannelId,
+    targetTimestamp: input.targetTimestamp,
+    precedingMessages: input.precedingMessages,
+    stageACategory: input.stageACategory,
+    labels: input.labels,
+    primaryLabel: input.primaryLabel,
+    confidence: input.confidence,
+    stage: input.stage,
+    reasonJa: input.reasonJa,
+    labelSource: 'user_report',
+    extensionVersion: chrome.runtime.getManifest().version,
+  });
+  // userFeedback は buildJudgmentLog のシグネチャに含まれないため後付けで設定
+  log.userFeedback = userFeedback;
+
+  client.enqueueLog(log);
+  return logId;
 }
 
 /**

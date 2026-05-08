@@ -49,6 +49,7 @@ import { sendStage2Batch } from './filter-orchestrator.js';
 import {
   initCollectionEmitter,
   emitJudgmentLog,
+  emitMisreportLog,
   shutdownCollectionEmitter,
 } from './collection-emit.js';
 
@@ -702,15 +703,71 @@ function applyFilter(
   if (!currentSettings) return;
   const settings = currentSettings;
 
+  // misreport 発火時の SpoilerJudgmentLog 構築用 context を applyFilter 時点で
+  // 確定させる。後で DOM から再取得すると el が剥がれて videoId 等が取れない
+  // ケースがあるため、この時点で snapshot を取る。
+  const videoId = getVideoIdFromUrl();
+  const channelId = getChannelIdFromDom();
+  const targetAuthorChannelId = getAuthorChannelIdFromElement(el);
+  const precedingMessages =
+    currentPageMode === 'archive_replay' ? collectPrecedingMessages(el) : [];
+
   const onMisreport = (): void => {
+    const reportedAt = new Date().toISOString();
     const entry: MisreportEntry = {
       text,
       spoilerCategory: spoilerCategory ?? null,
       gameId: settings.gameId,
       progress: settings.progressByGame[settings.gameId] ?? null,
       filterMode: settings.filterMode,
-      timestamp: new Date().toISOString(),
+      timestamp: reportedAt,
     };
+
+    // Phase 2.5: opt-in 中なら ingest にも並行送信し、生成された logId を
+    // MisreportEntry.syncedLogId に保存する。emitMisreportLog は opt-out なら
+    // null を返すため、entry.synced も自動で false 相当になる。
+    // 必須フィールド（videoId / channelId / authorChannelId）が欠けている場合は
+    // 諦めてローカル保存のみ（apps/api の 422 を避ける）。
+    if (videoId && channelId && targetAuthorChannelId) {
+      const logId = emitMisreportLog(
+        {
+          videoId,
+          channelId,
+          gameTitle:
+            settings.gameId === 'none' || settings.gameId === 'other'
+              ? null
+              : settings.gameId,
+          timeIntoStream:
+            currentPageMode === 'live' && liveStartedAtMs !== null
+              ? Math.floor((Date.now() - liveStartedAtMs) / 1000)
+              : null,
+          judgmentMode: currentPageMode,
+          targetBody: text,
+          targetAuthorChannelId,
+          targetTimestamp: new Date().toISOString(),
+          precedingMessages,
+          stageACategory: 'unknown',
+          labels: ['spoiler'],
+          primaryLabel: 'spoiler',
+          confidence: 1.0,
+          stage: 'stage2',
+          reasonJa: null,
+          labelSource: 'user_report',
+        },
+        {
+          reportedAt,
+          // 視聴者が「フィルタは間違いだった」と報告 = 正しいラベルは 'safe'
+          correctLabel: 'safe',
+          failureCategory: null,
+          freeTextReason: null,
+        },
+      );
+      if (logId !== null) {
+        entry.synced = true;
+        entry.syncedLogId = logId;
+      }
+    }
+
     saveMisreport(entry);
   };
 
