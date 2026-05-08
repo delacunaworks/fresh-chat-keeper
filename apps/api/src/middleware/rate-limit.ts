@@ -56,7 +56,11 @@ export async function checkIngestRateLimit(
     const key = `ingest-rl:${ip}:${windowKey}`;
 
     const current = await kv.get(key);
-    const count = current !== null ? parseInt(current, 10) : 0;
+    // KV に壊れた値（'NaN' / '' / 'abc'）が入っていても 0 として扱い、
+    // parseInt の NaN 戻りで上限チェックが false になって rate limit が
+    // 無効化される事故を防ぐ。Number.isFinite で 0 へフォールバック。
+    const parsed = current !== null ? parseInt(current, 10) : 0;
+    const count = Number.isFinite(parsed) ? parsed : 0;
 
     if (count >= RATE_LIMIT_MAX) {
       return false;
