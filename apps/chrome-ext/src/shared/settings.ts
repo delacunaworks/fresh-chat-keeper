@@ -39,6 +39,13 @@ export interface Settings {
   displayMode: DisplayMode;
   /** Stage 2 プロキシの URL（デフォルト: http://localhost:8787） */
   proxyUrl: string;
+  /**
+   * 収集 API のベース URL（Phase 2.5 / v0.3.5、判定ログ送信用）。
+   * `apps/api` のエンドポイント（POST /v1/consent / /v1/ingest / /v1/revoke）に
+   * リクエストする際に使用。オプトイン OFF のユーザーには関係ない。
+   * 本番 URL は P2.5-DEPLOY-01 で確定するまでプレースホルダー。
+   */
+  collectionApiUrl: string;
   /** ユーザー定義のカスタム NG ワード一覧 */
   customNgWords: CustomNGWord[];
   /** 有効化されているジャンルテンプレートのIDリスト */
@@ -52,6 +59,9 @@ export const DEFAULT_SETTINGS: Settings = {
   filterMode: 'standard',
   displayMode: 'placeholder',
   proxyUrl: 'https://fresh-chat-keeper-proxy.playnicelab.workers.dev',
+  // Phase 2.5 リリース時点では本番 URL 未確定。DEPLOY-01 で正しい URL に置換する。
+  // ローカル開発時は popup の設定 or chrome.storage の手動上書きで `http://127.0.0.1:8788` 等を指す。
+  collectionApiUrl: 'https://fresh-chat-keeper-api.playnicelab.workers.dev',
   customNgWords: [],
   selectedGenreTemplates: [],
 };
