@@ -106,43 +106,41 @@ export async function getActiveConsentVersion(
 /**
  * ユーザーの同意取り消しを記録し、関連する judgment_logs を削除する。
  *
- * 手順:
- * 1. consent_records.revoked_at を更新（該当行が無ければ INSERT で revoked 状態を作る）
+ * 1 トランザクション（D1 batch）で:
+ * 1. consent_records.revoked_at を更新（該当行が無ければ changes=0、idempotent）
  * 2. judgment_logs から user_token_hashed が一致する行を削除
+ *
+ * 2 つのクエリを batch で実行することで、片方が失敗してもう片方が成功する
+ * partial failure を防ぐ（B2 レビュー🔴指摘）。D1 batch は SQLite の
+ * implicit transaction で全体ロールバックされる。
  *
  * Phase 2.5 では同期削除（小規模なバッチ前提）。将来件数が増えたら retention
  * cron に委譲する設計に変える（設計書 §6.4）。
  *
- * @returns 削除した judgment_logs の件数（D1 の changes / `meta.changes`）
+ * @returns 削除した judgment_logs の件数（D1 の `meta.changes`）
  */
 export async function revokeConsentAndDeleteLogs(
   db: D1Database,
   hashedUserToken: string,
   revokedAt: number,
 ): Promise<number> {
-  // (1) consent_records.revoked_at を更新。該当ユーザーの全 consent_version を一括 revoke。
-  //     UPSERT は使わず UPDATE で十分（同意していないユーザーから revoke が来た場合は
-  //     行が存在せず changes=0、処理は idempotent に成功扱い）。
-  await db
+  const updateStmt = db
     .prepare(
       `UPDATE consent_records
        SET revoked_at = ?
        WHERE user_token_hashed = ?
          AND revoked_at IS NULL`,
     )
-    .bind(revokedAt, hashedUserToken)
-    .run();
+    .bind(revokedAt, hashedUserToken);
 
-  // (2) judgment_logs から該当ユーザーのログを削除
-  const deleteResult = await db
-    .prepare(
-      `DELETE FROM judgment_logs WHERE user_token_hashed = ?`,
-    )
-    .bind(hashedUserToken)
-    .run();
+  const deleteStmt = db
+    .prepare(`DELETE FROM judgment_logs WHERE user_token_hashed = ?`)
+    .bind(hashedUserToken);
 
-  // D1 の RunResult.meta.changes は削除件数を含む
-  return deleteResult.meta?.changes ?? 0;
+  // batch の戻りは各 statement の結果配列。順序は引数の順序と一致。
+  const results = await db.batch([updateStmt, deleteStmt]);
+  // index 1 が DELETE の結果。meta.changes が削除件数。
+  return results[1]?.meta?.changes ?? 0;
 }
 
 // ─── テスト用エクスポート ─────────────────────────────────────

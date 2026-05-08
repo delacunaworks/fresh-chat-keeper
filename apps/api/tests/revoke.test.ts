@@ -28,8 +28,25 @@ function createMockD1WithRunRecorder(): {
   const runs: FakeRunCall[] = [];
   let deleteChanges = 0;
 
+  // 各 stmt は _sql / _boundParams() を露出させ、batch / run の両方で
+  // SQL と引数を取り出せるようにしている。実装側が batch に切り替わっても
+  // 同じ内部表現を使い続けられる。
   const prepare = (sql: string): D1PreparedStatement => {
     let boundParams: unknown[] = [];
+    const buildResult = (isDelete: boolean) =>
+      ({
+        success: true,
+        meta: {
+          changes: isDelete ? deleteChanges : 0,
+          last_row_id: 0,
+          duration: 0,
+          rows_read: 0,
+          rows_written: isDelete ? deleteChanges : 0,
+          size_after: 0,
+        },
+        results: [],
+      }) as unknown as D1Response;
+
     const stmt = {
       bind: (...args: unknown[]) => {
         boundParams = args;
@@ -38,22 +55,12 @@ function createMockD1WithRunRecorder(): {
       first: async () => null,
       run: async () => {
         runs.push({ sql, params: boundParams });
-        const isDelete = sql.toUpperCase().includes('DELETE FROM JUDGMENT_LOGS');
-        return {
-          success: true,
-          meta: {
-            changes: isDelete ? deleteChanges : 0,
-            last_row_id: 0,
-            duration: 0,
-            rows_read: 0,
-            rows_written: isDelete ? deleteChanges : 0,
-            size_after: 0,
-          },
-          results: [],
-        } as unknown as D1Response;
+        return buildResult(sql.toUpperCase().includes('DELETE FROM JUDGMENT_LOGS'));
       },
       all: async () => ({ results: [], success: true, meta: {} }) as unknown as D1Result,
       raw: async () => [] as unknown as never[],
+      _sql: () => sql,
+      _boundParams: () => boundParams,
     } as unknown as D1PreparedStatement;
     return stmt;
   };
@@ -61,7 +68,19 @@ function createMockD1WithRunRecorder(): {
   return {
     db: {
       prepare,
-      batch: async () => [],
+      batch: async (stmts: D1PreparedStatement[]) => {
+        return stmts.map((s) => {
+          const meta = s as unknown as { _sql: () => string; _boundParams: () => unknown[] };
+          const sql = meta._sql();
+          runs.push({ sql, params: meta._boundParams() });
+          const isDelete = sql.toUpperCase().includes('DELETE FROM JUDGMENT_LOGS');
+          return {
+            success: true,
+            meta: { changes: isDelete ? deleteChanges : 0 },
+            results: [],
+          } as unknown as D1Result;
+        });
+      },
       dump: async () => new ArrayBuffer(0),
       exec: async () => ({ count: 0, duration: 0 }) as D1ExecResult,
     } as unknown as D1Database,
