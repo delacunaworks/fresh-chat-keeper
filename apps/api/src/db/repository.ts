@@ -101,7 +101,55 @@ export async function getActiveConsentVersion(
   return result ?? null;
 }
 
+/**
+ * consent_versions に該当する version 行が存在するか確認する。
+ *
+ * /v1/consent endpoint で「クライアントが申告した consentVersion が
+ * サーバー側にも存在する」ことを担保するために使う。
+ */
+export async function consentVersionExists(
+  db: D1Database,
+  version: string,
+): Promise<boolean> {
+  const row = await db
+    .prepare(`SELECT version FROM consent_versions WHERE version = ? LIMIT 1`)
+    .bind(version)
+    .first<{ version: string }>();
+  return row !== null;
+}
+
 // ─── consent_records ─────────────────────────────────────────
+
+/**
+ * 同意記録を UPSERT する。
+ *
+ * 動作:
+ * - 行が存在しない: 新規 INSERT（consented_at = now、revoked_at = NULL）
+ * - 行が存在する: revoked_at = NULL クリア + consented_at を最新時刻に更新
+ *   （revoke 後に再度 opt-in した場合に対応）
+ *
+ * SQLite の UPSERT 構文（D1 は SQLite 互換）:
+ *   INSERT ... ON CONFLICT(pk) DO UPDATE SET ...
+ */
+export async function upsertConsentRecord(
+  db: D1Database,
+  hashedUserToken: string,
+  consentVersion: string,
+  consentedAt: number,
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO consent_records
+         (user_token_hashed, consent_version, consented_at, revoked_at)
+       VALUES (?, ?, ?, NULL)
+       ON CONFLICT(user_token_hashed, consent_version) DO UPDATE SET
+         consented_at = excluded.consented_at,
+         revoked_at = NULL`,
+    )
+    .bind(hashedUserToken, consentVersion, consentedAt)
+    .run();
+}
+
 
 /**
  * ユーザーの同意取り消しを記録し、関連する judgment_logs を削除する。

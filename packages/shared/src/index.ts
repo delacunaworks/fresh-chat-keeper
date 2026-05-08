@@ -40,6 +40,8 @@ export type {
   ConsentVersionMismatchResponse,
   RevokeRequestPayload,
   RevokeResponsePayload,
+  ConsentNotifyRequestPayload,
+  ConsentNotifyResponsePayload,
 } from "./types/collection.js";
 
 export type {

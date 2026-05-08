@@ -22,6 +22,7 @@ import type { Env } from './env.js';
 import { corsMiddleware } from './middleware/cors.js';
 import { ingestRouter } from './routes/ingest.js';
 import { revokeRouter } from './routes/revoke.js';
+import { consentRouter } from './routes/consent.js';
 import { runRetention } from './db/retention.js';
 
 const app = new Hono<{ Bindings: Env }>();
@@ -40,6 +41,7 @@ app.get('/', (c) =>
 
 app.route('/v1', ingestRouter);
 app.route('/v1', revokeRouter);
+app.route('/v1', consentRouter);
 
 /**
  * Cloudflare Workers の cron trigger ハンドラ。wrangler.toml の

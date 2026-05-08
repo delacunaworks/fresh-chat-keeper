@@ -235,3 +235,21 @@ export interface RevokeResponsePayload {
   /** 削除された judgment_logs の概算件数（取得できない場合は null） */
   deletedLogCount: number | null;
 }
+
+/**
+ * POST /v1/consent のリクエストボディ。
+ * クライアントが opt-in モーダルで「同意」した直後に送信し、サーバー側
+ * consent_records に記録を残す（後の revoke / retention の起点）。
+ */
+export interface ConsentNotifyRequestPayload {
+  /** 同意したバージョン（consent_versions.version と一致する必要あり） */
+  consentVersion: string;
+}
+
+/** POST /v1/consent のレスポンス（200 OK） */
+export interface ConsentNotifyResponsePayload {
+  /** 同意が記録されたか（新規 INSERT or 既存行の revoked_at クリア） */
+  recorded: true;
+  /** サーバー側で有効な現行バージョン（クライアント側の整合確認用） */
+  currentConsentVersion: string;
+}
