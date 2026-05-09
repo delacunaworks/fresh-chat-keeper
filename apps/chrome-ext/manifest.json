@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Fresh Chat Keeper",
-  "version": "0.3.1",
+  "version": "0.3.5",
   "description": "ゲーム配信のチャットからネタバレをフィルタします",
   "homepage_url": "https://github.com/delacunaworks/fresh-chat-keeper",
   "icons": {
