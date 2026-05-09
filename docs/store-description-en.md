@@ -65,6 +65,15 @@ Settings apply instantly. Fresh Chat Keeper works automatically from that point 
 - **No API key needed**: Fresh Chat Keeper manages API access through a secure proxy — you don't need to provide any keys
 - **No account required**: Install and use immediately, no sign-up needed
 
+#### Optional Data Collection (opt-in, v0.3.5 and later)
+
+For users who want to help improve spoiler detection, we now offer an opt-in feature to store judgment logs on our servers.
+
+- **Disabled by default.** Activated only by explicitly toggling the switch in the popup and confirming via the consent dialog
+- Author identifiers are SHA-1 hashed on the server; plaintext values are never stored
+- Revoke at any time from the popup. Revocation also deletes past server-side logs (within the last 90 days)
+- See the "Opt-in Data Collection" section in the Privacy Policy for details
+
 Full privacy policy: https://github.com/delacunaworks/fresh-chat-keeper/blob/main/docs/privacy-policy.md
 
 
