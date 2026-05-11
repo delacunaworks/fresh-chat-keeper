@@ -10,7 +10,8 @@ coverage/
 test-request*.json
 
 # Chrome Web Store 提出用 zip（手動生成、ローカル成果物）
-fresh-chat-keeper-v*.zip
+fresh-chat-keeper*.zip
+apps/chrome-ext/*.zip
 
 # ローカル開発専用ドキュメント（GitHub非公開）
 PROJECT_PLAN.md
