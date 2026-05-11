@@ -21,6 +21,7 @@ import {
   matchesGenreTemplate,
   matchesGenreKeywordForStage2,
   matchesGameplayHintForStage2,
+  isObviouslySafe,
 } from '@fresh-chat-keeper/judgment-engine/stage1';
 import type { GenreTemplate } from '@fresh-chat-keeper/knowledge-base';
 import { filterMessageElement, restoreMessageElement, switchDisplayMode, ATTR_FALSE_POSITIVE } from './chat-dom.js';
@@ -45,6 +46,12 @@ import {
   type JudgeCacheEntry,
 } from './chrome-cache.js';
 import { sendStage2Batch } from './filter-orchestrator.js';
+import {
+  initCollectionEmitter,
+  emitJudgmentLog,
+  emitMisreportLog,
+  shutdownCollectionEmitter,
+} from './collection-emit.js';
 
 /** YouTube チャットリプレイのメッセージコンテナ */
 const ITEMS_SELECTOR = '#items';
@@ -91,6 +98,9 @@ function shutdownOnInvalidContext(): void {
   itemsObserver?.disconnect();
   itemsObserver = null;
   clearStage2Queue();
+  // Phase 2.5: ingest バッファをフラッシュ（拡張更新前に直近のログを救う）。
+  // chrome.runtime が無効化されている場合 fetch も失敗するが try で保護される。
+  void shutdownCollectionEmitter();
 }
 
 // ─── モジュールスコープ状態 ───────────────────────────────────────────────────
@@ -138,10 +148,46 @@ let drainDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 /** 起動時に取得した匿名トークン */
 let anonToken = '';
 
+/** 現在のモード（archive / live）。ingest 時の judgmentMode に使う */
+let currentPageMode: 'archive_replay' | 'live' = 'archive_replay';
+
+/** 配信開始時刻（live モードのみ。archive は常に null） */
+let liveStartedAtMs: number | null = null;
+
+/**
+ * emit スキップの warn を 1 度だけ出すためのフラグ。
+ * YouTube DOM 構造変更で必須フィールドが取れなくなった際、ログ氾濫を避けつつ
+ * 早期検出できるようにする（タブごとに 1 回）。
+ */
+let emitSkipWarned = false;
+
+/**
+ * 必須フィールドが欠けて emit を諦めた際、原因を 1 度だけ warn 出力する。
+ * production でも有効（ユーザー環境での DOM 変更検出のため）。
+ */
+function warnEmitSkipOnce(fields: {
+  videoId: string;
+  channelId: string;
+  targetAuthorChannelId: string;
+}): void {
+  if (emitSkipWarned) return;
+  emitSkipWarned = true;
+  const missing = Object.entries(fields)
+    .filter(([, v]) => !v)
+    .map(([k]) => k);
+  console.warn(
+    `[FreshChatKeeper] ingest emit skipped: missing DOM fields [${missing.join(', ')}]. ` +
+      `YouTube の DOM 構造が変わった可能性があります。`,
+  );
+}
+
 // ─── エントリポイント ─────────────────────────────────────────────────────────
 
 export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
   console.log(`[FreshChatKeeper] ${mode === 'live' ? 'ライブモード' : 'アーカイブモード'}で起動しました`);
+
+  currentPageMode = mode === 'live' ? 'live' : 'archive_replay';
+  liveStartedAtMs = mode === 'live' ? Date.now() : null;
 
   // 動画タイトルを取得（親フレームの document.title から "- YouTube" を除去）
   currentVideoTitle = getVideoTitle();
@@ -153,6 +199,12 @@ export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
   Promise.all([initStage2Cache(), getOrCreateAnonToken()])
     .then(([, token]) => {
       anonToken = token;
+      // Phase 2.5: collection-emit に正しい token を渡す。
+      // currentSettings が先に解決していれば apiUrl を、未解決なら DEFAULT を使う。
+      const apiUrl = currentSettings?.collectionApiUrl ?? '';
+      if (apiUrl) {
+        void initCollectionEmitter(apiUrl, anonToken);
+      }
     })
     .catch((err) => {
       // chrome.storage 失敗等。anonToken が空のままだと Stage 2 が動かないが、
@@ -164,6 +216,15 @@ export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
     .then((settings) => {
       currentSettings = settings;
       currentKeywords = buildKeywordsFromSettings(settings);
+
+      // Phase 2.5: opt-in している場合のみ collection-emit を起動。
+      // anonToken が空でも初期化は進める（あとから resolve した時点で
+      // initCollectionEmitter は再呼び出ししない設計だが、IngestClient は
+      // refreshClient() のタイミングで token を再評価するため問題ない）。
+      // ※anonToken の Promise が完了する前に initCollectionEmitter が走る
+      // 可能性があるため、Promise.all ブロック側でも initCollectionEmitter を
+      // 呼んで二段構えにする（後勝ち）。
+      void initCollectionEmitter(settings.collectionApiUrl, anonToken);
 
       chrome.storage.onChanged.addListener((changes, area) => {
         if (area !== 'local' || !changes[STORAGE_KEY]) return;
@@ -375,10 +436,28 @@ function processMessage(el: Element): void {
 
   if (revealedTexts.has(text)) return;
 
+  // ── 段階A 前駆体: 「明らかに無害」コメントは Stage 2 をスキップ ───────────────
+  // judgment-engine の isObviouslySafe（"草"/"www"/"888"/2文字以下）が真なら
+  // ネタバレフィルタは行わない（既存挙動: 何もしない）。
+  // Phase 2.5 で opt-in 中なら 'reaction' カテゴリでログを残す（§2.1, §4.4）。
+  if (isObviouslySafe(text)) {
+    emitJudgmentForElement(el, text, {
+      stageACategory: 'reaction',
+      labels: ['safe'],
+      primaryLabel: 'safe',
+      confidence: 1.0,
+      stage: 'stage1',
+      reasonJa: null,
+      labelSource: 'haiku',
+    });
+    return;
+  }
+
   // ── カスタムNGワード: 即時判定（ゲーム知識ベースと独立） ───────────────────────
   const customNgWords = currentSettings.customNgWords ?? [];
   const matchedNgWord = matchesCustomNGWord(text, customNgWords);
   if (matchedNgWord !== null) {
+    emitStage1SpoilerLog(el, text);
     applyFilter(el, text, matchedNgWord);
     return;
   }
@@ -386,6 +465,7 @@ function processMessage(el: Element): void {
   // ── ジャンルテンプレート: 即時判定（ゲーム知識ベースと独立） ──────────────────
   const matchedGenre = matchesGenreTemplate(text, currentGenreTemplates);
   if (matchedGenre !== null) {
+    emitStage1SpoilerLog(el, text);
     applyFilter(el, text, matchedGenre);
     return;
   }
@@ -394,6 +474,7 @@ function processMessage(el: Element): void {
   const matchResult = matchesKeyword(text, currentKeywords, currentDescriptionPhrases);
 
   if (matchResult !== null) {
+    emitStage1SpoilerLog(el, text);
     applyFilter(el, text, matchResult.keyword, matchResult.verb ?? matchResult.phrase);
     return;
   }
@@ -526,6 +607,66 @@ async function drainStage2Queue(): Promise<void> {
 }
 
 /**
+ * Phase 2.5: 1 件の判定を ingest クライアントに渡す。
+ *
+ * opt-in OFF のユーザーには collection-emit 側で no-op になるため
+ * ここでガード不要。stageACategory / labels 等は呼び出し側が決める。
+ */
+function emitJudgmentForElement(
+  el: Element,
+  text: string,
+  judgment: {
+    stageACategory: import('@fresh-chat-keeper/shared').StageACategory;
+    labels: import('@fresh-chat-keeper/shared').CollectionLabel[];
+    primaryLabel: import('@fresh-chat-keeper/shared').CollectionLabel;
+    confidence: number;
+    stage: 'stage1' | 'stage2';
+    reasonJa: string | null;
+    labelSource: import('@fresh-chat-keeper/shared').LabelSource;
+  },
+): void {
+  if (!currentSettings) return;
+
+  const videoId = getVideoIdFromUrl();
+  const channelId = getChannelIdFromDom();
+  const targetAuthorChannelId = getAuthorChannelIdFromElement(el);
+
+  // 必須フィールドが欠けている場合は emit を諦める（apps/api の 422 を避ける）。
+  // サイレント失敗を避けるため、欠けたフィールドを warn で 1 度だけ通知する
+  // （DOM 構造変更の早期検出用、production でも有効）。
+  if (!videoId || !channelId || !targetAuthorChannelId) {
+    warnEmitSkipOnce({ videoId, channelId, targetAuthorChannelId });
+    return;
+  }
+
+  emitJudgmentLog({
+    videoId,
+    channelId,
+    gameTitle:
+      currentSettings.gameId === 'none' || currentSettings.gameId === 'other'
+        ? null
+        : currentSettings.gameId,
+    timeIntoStream: currentPageMode === 'live' && liveStartedAtMs !== null
+      ? Math.floor((Date.now() - liveStartedAtMs) / 1000)
+      : null,
+    judgmentMode: currentPageMode,
+    targetBody: text,
+    targetAuthorChannelId,
+    targetTimestamp: new Date().toISOString(),
+    // archive モードなら直前 N 件、live は空配列（仕様書 §4.4）
+    precedingMessages:
+      currentPageMode === 'archive_replay' ? collectPrecedingMessages(el) : [],
+    stageACategory: judgment.stageACategory,
+    labels: judgment.labels,
+    primaryLabel: judgment.primaryLabel,
+    confidence: judgment.confidence,
+    stage: judgment.stage,
+    reasonJa: judgment.reasonJa,
+    labelSource: judgment.labelSource,
+  });
+}
+
+/**
  * Stage 2 判定結果を DOM に適用する。
  * - 'block' または 'uncertain' → フィルタ（安全側に倒す）
  * - 'allow' → 何もしない
@@ -541,6 +682,25 @@ function applyStage2Verdict(candidate: Stage2Candidate, entry: JudgeCacheEntry):
   }
   const el = candidate.el.deref();
   if (el) showPendingElement(el);
+
+  // Phase 2.5 ingest: stage 2 の判定結果は verdict に関わらず常に記録する
+  // （'allow' = 'safe' ラベル、'block' = 'spoiler' ラベル）。フィルタ後に
+  // emit すると el がフィルタ書き換え後で textContent が変わるので、
+  // フィルタ適用前にここで emit する。
+  if (el && el.textContent?.trim() === candidate.text) {
+    const isBlocked = entry.spoilerCategory === 'direct_spoiler'
+      || entry.spoilerCategory === 'foreshadowing_hint'
+      || entry.spoilerCategory === 'gameplay_hint';
+    emitJudgmentForElement(el, candidate.text, {
+      stageACategory: 'unknown',
+      labels: isBlocked ? ['spoiler'] : ['safe'],
+      primaryLabel: isBlocked ? 'spoiler' : 'safe',
+      confidence: entry.confidence ?? 1.0,
+      stage: 'stage2',
+      reasonJa: null,
+      labelSource: 'haiku',
+    });
+  }
 
   const verdict = verdictFromCache(entry, currentSettings.filterMode);
   if (verdict === 'allow') return;
@@ -575,15 +735,71 @@ function applyFilter(
   if (!currentSettings) return;
   const settings = currentSettings;
 
+  // misreport 発火時の SpoilerJudgmentLog 構築用 context を applyFilter 時点で
+  // 確定させる。後で DOM から再取得すると el が剥がれて videoId 等が取れない
+  // ケースがあるため、この時点で snapshot を取る。
+  const videoId = getVideoIdFromUrl();
+  const channelId = getChannelIdFromDom();
+  const targetAuthorChannelId = getAuthorChannelIdFromElement(el);
+  const precedingMessages =
+    currentPageMode === 'archive_replay' ? collectPrecedingMessages(el) : [];
+
   const onMisreport = (): void => {
+    const reportedAt = new Date().toISOString();
     const entry: MisreportEntry = {
       text,
       spoilerCategory: spoilerCategory ?? null,
       gameId: settings.gameId,
       progress: settings.progressByGame[settings.gameId] ?? null,
       filterMode: settings.filterMode,
-      timestamp: new Date().toISOString(),
+      timestamp: reportedAt,
     };
+
+    // Phase 2.5: opt-in 中なら ingest にも並行送信し、生成された logId を
+    // MisreportEntry.syncedLogId に保存する。emitMisreportLog は opt-out なら
+    // null を返すため、entry.synced も自動で false 相当になる。
+    // 必須フィールド（videoId / channelId / authorChannelId）が欠けている場合は
+    // 諦めてローカル保存のみ（apps/api の 422 を避ける）。
+    if (videoId && channelId && targetAuthorChannelId) {
+      const logId = emitMisreportLog(
+        {
+          videoId,
+          channelId,
+          gameTitle:
+            settings.gameId === 'none' || settings.gameId === 'other'
+              ? null
+              : settings.gameId,
+          timeIntoStream:
+            currentPageMode === 'live' && liveStartedAtMs !== null
+              ? Math.floor((Date.now() - liveStartedAtMs) / 1000)
+              : null,
+          judgmentMode: currentPageMode,
+          targetBody: text,
+          targetAuthorChannelId,
+          targetTimestamp: new Date().toISOString(),
+          precedingMessages,
+          stageACategory: 'unknown',
+          labels: ['spoiler'],
+          primaryLabel: 'spoiler',
+          confidence: 1.0,
+          stage: 'stage2',
+          reasonJa: null,
+          labelSource: 'user_report',
+        },
+        {
+          reportedAt,
+          // 視聴者が「フィルタは間違いだった」と報告 = 正しいラベルは 'safe'
+          correctLabel: 'safe',
+          failureCategory: null,
+          freeTextReason: null,
+        },
+      );
+      if (logId !== null) {
+        entry.synced = true;
+        entry.syncedLogId = logId;
+      }
+    }
+
     saveMisreport(entry);
   };
 
@@ -604,6 +820,222 @@ function applyFilter(
     // processMessage のチェック直後にコンテキストが無効になった場合のレース条件ガード
     shutdownOnInvalidContext();
   }
+}
+
+// ─── Phase 2.5 ingest 補助 ─────────────────────────────────────────────────
+
+/** Stage 1 でブロックされたコメントを 'spoiler' ラベルで ingest 用に emit する */
+function emitStage1SpoilerLog(el: Element, text: string): void {
+  emitJudgmentForElement(el, text, {
+    stageACategory: 'unknown',
+    labels: ['spoiler'],
+    primaryLabel: 'spoiler',
+    confidence: 1.0,
+    stage: 'stage1',
+    reasonJa: null,
+    labelSource: 'haiku',
+  });
+}
+
+/** YouTube の親フレーム URL から videoId を抽出（取得不能なら空文字） */
+function getVideoIdFromUrl(): string {
+  try {
+    const url = new URL(window.parent?.location?.href ?? window.location.href);
+    return url.searchParams.get('v') ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * 親フレームの DOM から配信者の channel ID を抽出する。
+ *
+ * YouTube の DOM は SPA レンダリング + Lit/Polymer Components で頻繁に
+ * 構造が変わる。2026-05 時点では `meta[itemprop="channelId"]` も
+ * `ytd-channel-name a` も親 document からは取れず、唯一安定して取れるのは
+ * 親ページ全体に散らばる `<a href*="/channel/UC...">` の集合のみ。
+ *
+ * 配信者の channel ID は「join / videos / about など複数のサブパスへの
+ * リンクが同じ UC ID を指す」性質を利用し、**親ページ内で最頻出の UC ID** を
+ * 配信者と判定する。これは関連動画やコメンター等の単発リンクに紛れない
+ * 堅牢な戦略。
+ *
+ * 失敗時は空文字を返す（呼び出し側で emit を諦める）。
+ */
+function getChannelIdFromDom(): string {
+  try {
+    const doc = window.parent?.document;
+    if (!doc) return '';
+
+    // 1. meta itemprop（旧 schema.org、現状は出ない）
+    const meta = doc.querySelector<HTMLMetaElement>('meta[itemprop="channelId"]');
+    if (meta?.content) return meta.content;
+
+    // 2. ytd-channel-name の anchor（旧レイアウト互換）
+    const channelLink = doc.querySelector<HTMLAnchorElement>(
+      'ytd-channel-name a[href*="/channel/"]',
+    );
+    const fromChannelName = extractChannelIdFromHref(channelLink?.href);
+    if (fromChannelName) return fromChannelName;
+
+    // 3. #owner-text の anchor（モバイル/旧レイアウト）
+    const ownerLink = doc.querySelector<HTMLAnchorElement>(
+      '#owner-text a[href*="/channel/"], #owner a[href*="/channel/"]',
+    );
+    const fromOwner = extractChannelIdFromHref(ownerLink?.href);
+    if (fromOwner) return fromOwner;
+
+    // 4. 最頻出戦略: 親ページ全体の /channel/UC... リンクから最頻出 ID を返す。
+    //    配信者は join / videos / about など複数のサブパスを持つため、自然と
+    //    最頻出になる。関連動画リンク等は通常 1 件なので紛れない。
+    return findMostFrequentChannelId(doc);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * チャットメッセージ要素から投稿者の識別子を抽出する。
+ *
+ * **2026-05 時点の仕様変更（重要）**:
+ * YouTube は live chat replay の DOM から `authorExternalChannelId`（UC...）を
+ * **完全に削除した**（プライバシー強化と推察）。HTML 属性・Polymer 内部状態
+ * （`__data` / `_data` / `properties`）・shadowRoot・iframe globals
+ * （`ytInitialData` 等）すべてに UC ID は存在しない。
+ *
+ * 唯一安定して取れるのは `#author-name` 内の **ハンドル名**
+ * （`@rm-yw4ep` のような表示名）。これを識別子として採用する。
+ *
+ * **データ収集への影響**: フィールド名 `targetAuthorChannelId` は維持
+ * （スキーマ互換性のため）、value がハンドル文字列になる。SHA-1 ハッシュ
+ * 化ロジックも変更不要（input 文字列が変わるだけ）。同一動画内のユーザー
+ * 一貫性は保たれるため、Phase 2.5 のデータ品質は十分保たれる。
+ *
+ * UC ID を復活させるには Phase 3+ で `fetch` 傍受による Innertube API
+ * レスポンス解析が必要（dev-docs/phase-3-multilabel.md 参照予定）。
+ *
+ * フォールバック chain（保険として旧経路も残す）:
+ *
+ *   1. `data-author-external-channel-id` — 旧属性（過去 YouTube 互換）
+ *   2. `author-external-channel-id` — data- prefix なし（過去 YouTube 互換）
+ *   3. `renderer.data.authorExternalChannelId` — Polymer JS プロパティ（過去）
+ *   4. renderer 内の `a[href*="/channel/"]` から抽出（過去）
+ *   5. **`#author-name` の textContent**（現行 2026-05、ハンドル名）
+ *
+ * すべて失敗時は空文字を返す。
+ */
+function getAuthorChannelIdFromElement(el: Element): string {
+  const renderer =
+    el.closest('yt-live-chat-text-message-renderer') ??
+    el.closest('yt-live-chat-paid-message-renderer');
+  if (!renderer) return '';
+
+  // 1. data- prefix 付き
+  const dataAttr = renderer.getAttribute('data-author-external-channel-id');
+  if (dataAttr) return dataAttr;
+
+  // 2. data- prefix なし
+  const plainAttr = renderer.getAttribute('author-external-channel-id');
+  if (plainAttr) return plainAttr;
+
+  // 3. Polymer data property
+  const polymerData = (renderer as unknown as {
+    data?: { authorExternalChannelId?: unknown };
+  }).data;
+  const fromPolymer = polymerData?.authorExternalChannelId;
+  if (typeof fromPolymer === 'string' && fromPolymer.length > 0) return fromPolymer;
+
+  // 4. renderer 内の anchor の href から抽出
+  const authorLink = renderer.querySelector<HTMLAnchorElement>('a[href*="/channel/"]');
+  const fromHref = extractChannelIdFromHref(authorLink?.href);
+  if (fromHref) return fromHref;
+
+  // 5. **現行 YouTube（2026-05）**: ハンドル名を使用。
+  //    `#author-name` の textContent から、付随する子要素のテキストを除外して
+  //    ハンドル本体だけを取り出す（badge 等のネスト要素のテキストが混入する
+  //    のを避けるため、子要素を一旦無視して直接の textNode のみを連結）。
+  const authorNameEl = renderer.querySelector('#author-name');
+  if (authorNameEl) {
+    const handle = extractDirectText(authorNameEl).trim();
+    // ハンドルは @ で始まる場合が多いが、任意の表示名（チャンネル名）の場合もある。
+    // 空でなければ採用する。同一動画内では同じ値を返すため、ユーザー一貫性 OK。
+    if (handle) return handle;
+  }
+
+  return '';
+}
+
+/**
+ * 要素の直下の textNode のテキストだけを連結する（子要素のテキストは除外）。
+ *
+ * `<span id="author-name"><span id="prepend-chat-badges"></span>@rm-yw4ep<span id="chip-badges"></span></span>`
+ * から `@rm-yw4ep` だけを取り出す用途。
+ */
+function extractDirectText(el: Element): string {
+  let text = '';
+  for (const node of Array.from(el.childNodes)) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      text += node.textContent ?? '';
+    }
+  }
+  return text;
+}
+
+/**
+ * `/channel/UCxxxxx...` を含む href から channelId 部分（UCxxxxx）を取り出す。
+ * マッチしなければ空文字。UC で始まり [A-Za-z0-9_-] が続く YouTube channelId 形式。
+ */
+function extractChannelIdFromHref(href: string | undefined | null): string {
+  if (!href) return '';
+  const match = href.match(/\/channel\/(UC[A-Za-z0-9_-]+)/);
+  return match?.[1] ?? '';
+}
+
+/**
+ * 親ページ内の `/channel/UC...` リンクから最頻出 channelId を返す。
+ *
+ * 配信者は join / videos / about / membership 等の複数サブパスを持つため、
+ * 自然と最頻出になる。関連動画やコメンターのリンクは通常 1 件で紛れない。
+ *
+ * 同数 1 位が複数ある場合は最初に見つかったものを返す。リンクが 1 つもなければ
+ * 空文字。
+ */
+function findMostFrequentChannelId(doc: Document): string {
+  const links = doc.querySelectorAll<HTMLAnchorElement>('a[href*="/channel/"]');
+  const counts = new Map<string, number>();
+  for (const link of Array.from(links)) {
+    const id = extractChannelIdFromHref(link.href);
+    if (!id) continue;
+    counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  let best: { id: string; count: number } | null = null;
+  for (const [id, count] of counts) {
+    if (best === null || count > best.count) best = { id, count };
+  }
+  return best?.id ?? '';
+}
+
+/**
+ * archive モードで現在の el の直前 N 件のメッセージを集める（最大 10）。
+ *
+ * VTuber 1B 互換構造に揃えるため { body, timestamp } の配列を返す。
+ * 投稿時刻は DOM から取得困難なため、現在時刻の `Date.now()` を - i*1000 ms
+ * のように最近順に逆算する。Phase 3+ で正確な timestamp 抽出（ライブ
+ * チャット renderer の data-timestamp 属性等）に差し替える。
+ */
+function collectPrecedingMessages(el: Element): import('@fresh-chat-keeper/shared').ContextMessage[] {
+  if (!itemsContainerRef) return [];
+  const allMsgs = Array.from(itemsContainerRef.querySelectorAll(MSG_TEXT_SELECTOR));
+  const idx = allMsgs.indexOf(el);
+  if (idx <= 0) return [];
+
+  const start = Math.max(0, idx - 10);
+  const slice = allMsgs.slice(start, idx);
+  const now = Date.now();
+  return slice.map((m, i) => ({
+    body: (m.textContent ?? '').trim(),
+    timestamp: new Date(now - (slice.length - i) * 1000).toISOString(),
+  }));
 }
 
 // ─── ユーティリティ ────────────────────────────────────────────────────────────

@@ -1,0 +1,10 @@
+{
+  "appName": {
+    "message": "Fresh Chat Keeper",
+    "description": "Extension display name (shown in chrome://extensions and popup tooltip)"
+  },
+  "appDescription": {
+    "message": "Filter spoiler comments from YouTube game stream chats",
+    "description": "Short extension description (shown in chrome://extensions list)"
+  }
+}

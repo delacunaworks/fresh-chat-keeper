@@ -1,0 +1,56 @@
+name = "fresh-chat-keeper-api"
+main = "src/index.ts"
+compatibility_date = "2026-04-27"
+
+# ─── デプロイ前に必ず確認 / 設定するもの ───────────────────────────
+# 1. COLLECTION_SALT（secret）: 投稿者識別子の SHA-1 ハッシュ用 salt。
+#    `wrangler secret put COLLECTION_SALT` で 32 バイト以上のランダム値を設定。
+#    例: `openssl rand -hex 32` で生成。salt は長期固定（変更すると過去
+#    ハッシュとの紐付けが切れる）。
+#
+# 2. ALLOWED_ORIGINS（var、本ファイル下部）: BACKGROUND-01 後は全 fetch が
+#    chrome-extension:// origin から発火するため、Chrome Web Store 公開後の
+#    本番 extension ID を `chrome-extension://<published-id>` の形式で設定する。
+#    複数 ID を許可する場合はカンマ区切り（dev / 本番ストアの両方を残すなど）。
+#
+# 3. D1 データベース: 初回 deploy 前に `wrangler d1 create fck-collection-db` で
+#    実体を作成し、出力された database_id を下記に反映する（現在は dev DB の ID）。
+#    その後 `wrangler d1 migrations apply COLLECTION_DB --remote` で
+#    migrations/0001_initial_collection.sql を適用。
+#
+# 4. consent_versions テーブルの seed: migration には含まれていないため、
+#    `wrangler d1 execute COLLECTION_DB --remote --command "INSERT INTO ..."`
+#    で初回 deploy 後に一度だけ投入する（手動オペ手順書参照）。
+#
+# 5. KV namespaces: `wrangler kv namespace create RATE_LIMIT_KV` と CONSENT_KV を
+#    実体作成し、出力された id を下記に反映。
+#
+# ローカル開発時は `.dev.vars` に COLLECTION_SALT と ALLOWED_ORIGINS を書く
+# （gitignore 済み、`[env.dev]` split は d1/kv バインディングを再宣言する必要が
+# あり煩雑なため使わない）。
+
+[[d1_databases]]
+binding = "COLLECTION_DB"
+database_name = "fck-collection-db"
+database_id = "11e45df4-e58f-4842-a018-23ec486e5648"  # ⚠ DEPLOY-01: 本番 ID に差し替え
+migrations_dir = "migrations"
+
+[[kv_namespaces]]
+binding = "RATE_LIMIT_KV"
+id = "3cb19ee1fcb34b83a296009474895862"  # ⚠ DEPLOY-01: 本番 ID に差し替え
+
+[[kv_namespaces]]
+binding = "CONSENT_KV"
+id = "30f59e56c01c473aab81dd2d08f5faf4"  # ⚠ DEPLOY-01: 本番 ID に差し替え
+
+# CORS 許可 origin のカンマ区切りリスト。
+# BACKGROUND-01 後は chrome-extension origin のみで動作する設計。
+# Chrome Web Store 公開後の extension ID を本番デプロイ時に置き換える:
+#   ALLOWED_ORIGINS = "chrome-extension://<published-extension-id>"
+[vars]
+ALLOWED_ORIGINS = "chrome-extension://placeholder-replace-at-deploy"
+
+# 毎日 03:00 UTC に retention cron 起動。judgment_logs を 90 日、
+# revoked consent_records を 30 日で自動削除する（src/db/retention.ts）。
+[triggers]
+crons = ["0 3 * * *"]

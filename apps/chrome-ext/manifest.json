@@ -1,8 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Fresh Chat Keeper",
-  "version": "0.3.1",
-  "description": "ゲーム配信のチャットからネタバレをフィルタします",
+  "name": "__MSG_appName__",
+  "version": "0.3.5",
+  "default_locale": "ja",
+  "description": "__MSG_appDescription__",
   "homepage_url": "https://github.com/delacunaworks/fresh-chat-keeper",
   "icons": {
     "16": "icons/icon16.png",
@@ -12,7 +13,10 @@
   "permissions": ["storage"],
   "host_permissions": [
     "*://www.youtube.com/*",
-    "https://fresh-chat-keeper-proxy.playnicelab.workers.dev/*"
+    "https://fresh-chat-keeper-proxy.playnicelab.workers.dev/*",
+    "https://fresh-chat-keeper-api.playnicelab.workers.dev/*",
+    "http://localhost:8788/*",
+    "http://127.0.0.1:8788/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -27,6 +31,6 @@
   ],
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Fresh Chat Keeper"
+    "default_title": "__MSG_appName__"
   }
 }

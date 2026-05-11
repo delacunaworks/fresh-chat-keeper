@@ -17,4 +17,15 @@ export interface MisreportEntry {
   filterMode: string;
   /** 報告日時（ISO 8601） */
   timestamp: string;
+
+  // ─── Phase 2.5 拡張（v0.3.5、optional で破壊的変更なし）────────
+  /**
+   * apps/api の /v1/ingest にサーバー送信済みかどうか。
+   * - undefined / false: 未送信（opt-in 前 or 送信失敗）
+   * - true: opt-in 中に並行送信済み
+   * 既存ユーザーの保存値は undefined のまま自然に扱える（破壊的変更なし）。
+   */
+  synced?: boolean;
+  /** 送信時にクライアントが発行した SpoilerJudgmentLog.logId（UUID v4） */
+  syncedLogId?: string;
 }

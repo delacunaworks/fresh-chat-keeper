@@ -25,10 +25,36 @@ export type {
 export type { MisreportEntry } from "./types/misreport.js";
 
 export type {
+  CollectionLabel,
+  StageACategory,
+  JudgmentMode,
+  LabelSource,
+  JudgmentStage,
+  TargetMessagePayload,
+  ContextMessage,
+  UserFeedbackPayload,
+  SpoilerJudgmentLog,
+  ConsentRecord,
+  IngestRequestPayload,
+  IngestResponsePayload,
+  ConsentVersionMismatchResponse,
+  RevokeRequestPayload,
+  RevokeResponsePayload,
+  ConsentNotifyRequestPayload,
+  ConsentNotifyResponsePayload,
+} from "./types/collection.js";
+
+export type {
   FilterSettings,
   FilterSettingsV1,
   GameContext,
 } from "./types/settings.js";
+
+export type {
+  BgFetchEndpoint,
+  BackgroundFetchRequest,
+  BackgroundFetchResponse,
+} from "./types/background-messaging.js";
 
 export { migrateSettings } from "./settings-migration.js";
 
