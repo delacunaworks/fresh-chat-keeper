@@ -27,9 +27,9 @@ import { useModalA11y } from './use-modal-a11y.js';
 /** 同意ポリシーの現行バージョン。apps/api 側 consent_versions と一致させる */
 export const CURRENT_CONSENT_VERSION = '2026-05-01';
 
-/** プライバシーポリシー全文 URL（DEPLOY-01 で確定したリンクに差し替え予定） */
+/** プライバシーポリシー全文 URL（delacunaworks.com brand site、VitePress + Cloudflare Pages） */
 export const PRIVACY_POLICY_URL =
-  'https://github.com/delacunaworks/fresh-chat-keeper/blob/main/docs/privacy-policy.md';
+  'https://delacunaworks.com/fresh-chat-keeper/privacy/';
 
 export interface CollectionConsentModalProps {
   /** モーダル表示制御（true で表示） */

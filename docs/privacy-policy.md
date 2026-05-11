@@ -1,7 +1,7 @@
 # プライバシーポリシー / Privacy Policy
 
 **Fresh Chat Keeper Chrome Extension**
-最終更新 / Last updated: 2026-05-XX
+最終更新 / Last updated: 2026-05-10
 
 ---
 
