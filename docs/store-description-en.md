@@ -4,7 +4,7 @@
 
 ## Short Description (132 characters max)
 
-AI-powered spoiler filter for YouTube game stream chats. Works on archives and live streams. No account needed — just install and play.
+AI-powered spoiler filter for YouTube game streams. Works on archives and live streams. No account needed — just install and play.
 
 ---
 
