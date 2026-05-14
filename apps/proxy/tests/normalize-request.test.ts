@@ -17,7 +17,7 @@ const {
   buildGameContextFromLegacy,
   buildGenreTemplateField,
   uncertainVerdict,
-  categoryToVerdict,
+  primaryToVerdict,
   checkRateLimit,
   isValidV2Settings,
 } = __test__;
@@ -501,56 +501,120 @@ describe('checkRateLimit (HARD-01: KV 障害時 fail-open)', () => {
 });
 
 describe('verdict 計算', () => {
+  /**
+   * primaryToVerdict 用の最小 settings ビルダー。Phase 3 は categories の
+   * ON/OFF が verdict 計算に効くため、各テストで該当カテゴリを明示する。
+   */
+  function buildSettings(
+    overrides?: Partial<{
+      harassment: boolean;
+      spam: boolean;
+      offTopic: boolean;
+      backseat: boolean;
+    }>,
+  ) {
+    return {
+      version: 3 as const,
+      enabled: true,
+      displayMode: 'placeholder' as const,
+      filterMode: 'archive' as const,
+      categories: {
+        spoiler: { enabled: true, strength: 'standard' as const },
+        harassment: { enabled: overrides?.harassment ?? false, strength: 'standard' as const },
+        spam: { enabled: overrides?.spam ?? false },
+        offTopic: { enabled: overrides?.offTopic ?? false, strength: 'standard' as const },
+        backseat: { enabled: overrides?.backseat ?? false, strength: 'standard' as const },
+      },
+      customBlockWords: [],
+      userTier: 'free' as const,
+    };
+  }
+
   it('uncertainVerdict は lenient モードで allow に倒す', () => {
     expect(uncertainVerdict('lenient')).toBe('allow');
     expect(uncertainVerdict('standard')).toBe('uncertain');
     expect(uncertainVerdict('strict')).toBe('uncertain');
   });
 
-  it('categoryToVerdict: direct_spoiler は常に block', () => {
-    expect(categoryToVerdict('direct_spoiler', 'lenient')).toBe('block');
-    expect(categoryToVerdict('direct_spoiler', 'standard')).toBe('block');
-    expect(categoryToVerdict('direct_spoiler', 'strict')).toBe('block');
-  });
-
-  it('categoryToVerdict: foreshadowing_hint は lenient で allow', () => {
-    expect(categoryToVerdict('foreshadowing_hint', 'lenient')).toBe('allow');
-    expect(categoryToVerdict('foreshadowing_hint', 'standard')).toBe('block');
-    expect(categoryToVerdict('foreshadowing_hint', 'strict')).toBe('block');
-  });
-
-  it('categoryToVerdict: gameplay_hint は strict のみ block', () => {
-    expect(categoryToVerdict('gameplay_hint', 'lenient')).toBe('allow');
-    expect(categoryToVerdict('gameplay_hint', 'standard')).toBe('allow');
-    expect(categoryToVerdict('gameplay_hint', 'strict')).toBe('block');
-  });
-
-  it('categoryToVerdict: safe は常に allow', () => {
-    expect(categoryToVerdict('safe', 'lenient')).toBe('allow');
-    expect(categoryToVerdict('safe', 'standard')).toBe('allow');
-    expect(categoryToVerdict('safe', 'strict')).toBe('allow');
-  });
-
-  describe('HARD-03: 未知の spoiler_category へのフォールバック', () => {
-    let warnSpy: ReturnType<typeof vi.spyOn>;
-    beforeEach(() => {
-      warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    });
-    afterEach(() => {
-      warnSpy.mockRestore();
+  describe('primaryToVerdict (Phase 3 マルチラベル)', () => {
+    it('safe → 常に allow（filterMode/カテゴリ設定に関係なく）', () => {
+      const s = buildSettings();
+      expect(primaryToVerdict('safe', s, 'lenient')).toBe('allow');
+      expect(primaryToVerdict('safe', s, 'standard')).toBe('allow');
+      expect(primaryToVerdict('safe', s, 'strict')).toBe('allow');
     });
 
-    it('未知の category（LLM ハルシネーション）→ uncertainVerdict にフォールバック', () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const result = categoryToVerdict('unknown' as any, 'standard');
-      expect(result).toBe('uncertain');
-      expect(warnSpy).toHaveBeenCalledOnce();
-      expect(warnSpy.mock.calls[0]?.[0]).toContain('Unknown spoiler_category');
+    it('spoiler → 常に block（強度はプロンプト側で処理済み）', () => {
+      const s = buildSettings();
+      expect(primaryToVerdict('spoiler', s, 'lenient')).toBe('block');
+      expect(primaryToVerdict('spoiler', s, 'standard')).toBe('block');
+      expect(primaryToVerdict('spoiler', s, 'strict')).toBe('block');
     });
 
-    it('未知の category + lenient モード → allow（uncertainVerdict の挙動）', () => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      expect(categoryToVerdict('garbage' as any, 'lenient')).toBe('allow');
+    it('harassment: enabled=true → block', () => {
+      expect(primaryToVerdict('harassment', buildSettings({ harassment: true }), 'standard')).toBe(
+        'block',
+      );
+    });
+
+    it('harassment: enabled=false → allow（OFF カテゴリは判定を発火しない）', () => {
+      expect(primaryToVerdict('harassment', buildSettings({ harassment: false }), 'standard')).toBe(
+        'allow',
+      );
+    });
+
+    it('spam: enabled=true → block', () => {
+      expect(primaryToVerdict('spam', buildSettings({ spam: true }), 'standard')).toBe('block');
+    });
+
+    it('spam: enabled=false → allow', () => {
+      expect(primaryToVerdict('spam', buildSettings({ spam: false }), 'standard')).toBe('allow');
+    });
+
+    it('off_topic: enabled=true → block', () => {
+      expect(primaryToVerdict('off_topic', buildSettings({ offTopic: true }), 'standard')).toBe(
+        'block',
+      );
+    });
+
+    it('off_topic: enabled=false → allow', () => {
+      expect(primaryToVerdict('off_topic', buildSettings({ offTopic: false }), 'standard')).toBe(
+        'allow',
+      );
+    });
+
+    it('backseat: enabled=true → block', () => {
+      expect(primaryToVerdict('backseat', buildSettings({ backseat: true }), 'standard')).toBe(
+        'block',
+      );
+    });
+
+    it('backseat: enabled=false → allow', () => {
+      expect(primaryToVerdict('backseat', buildSettings({ backseat: false }), 'standard')).toBe(
+        'allow',
+      );
+    });
+
+    describe('未知の primary（型外）→ uncertainVerdict にフォールバック', () => {
+      let warnSpy: ReturnType<typeof vi.spyOn>;
+      beforeEach(() => {
+        warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      });
+      afterEach(() => {
+        warnSpy.mockRestore();
+      });
+
+      it('不明 primary + standard → uncertain', () => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        expect(primaryToVerdict('unknown' as any, buildSettings(), 'standard')).toBe('uncertain');
+        expect(warnSpy).toHaveBeenCalledOnce();
+        expect(warnSpy.mock.calls[0]?.[0]).toContain('Unknown primary label');
+      });
+
+      it('不明 primary + lenient → allow（uncertainVerdict 経由）', () => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        expect(primaryToVerdict('garbage' as any, buildSettings(), 'lenient')).toBe('allow');
+      });
     });
   });
 });

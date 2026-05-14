@@ -26,6 +26,7 @@ import type {
   FilterSettings,
   GameContext,
   UserProgress,
+  JudgmentLabel,
 } from '@fresh-chat-keeper/shared';
 import {
   buildSystemPrompt,
@@ -36,6 +37,7 @@ import {
   type JudgmentContext,
 } from '@fresh-chat-keeper/judgment-engine';
 import { getAllGenreTemplates } from '@fresh-chat-keeper/knowledge-base';
+import { parseMultiLabelResponse, type ParsedJudgment } from './judgment-parser.js';
 
 export interface Env {
   ANTHROPIC_API_KEY: string;
@@ -44,7 +46,6 @@ export interface Env {
 
 // ─── 型定義 ──────────────────────────────────────────────────────────────────
 
-type SpoilerCategory = 'direct_spoiler' | 'foreshadowing_hint' | 'gameplay_hint' | 'safe';
 type FilterVerdict = 'block' | 'allow' | 'uncertain';
 
 /**
@@ -371,6 +372,8 @@ async function judgeBatch(
   // バッチサイズに応じて max_tokens を増やす（modelCfg.maxTokens は単一メッセージ前提の200）
   const maxTokens = Math.max(modelCfg.maxTokens, req.messages.length * 100);
 
+  // ネットワーク失敗・LLM エラー時の全件 uncertain fallback。
+  // Phase 3 マルチラベル化後も verdict 計算経路を維持（chrome-ext v0.3.5 互換）。
   const fallbackResults = (): FilterResult[] =>
     req.messages.map((m) => ({
       messageId: m.id,
@@ -404,49 +407,23 @@ async function judgeBatch(
     const data = (await response.json()) as { content: Array<{ type: string; text: string }> };
     const text = data.content[0]?.text ?? '';
 
-    // ```json ... ``` のような余分な記法にも対応するため、最初の `[` から最後の `]` までを抽出
-    const arrayMatch = text.match(/\[[\s\S]*\]/);
-    if (!arrayMatch) {
-      console.error('[FreshChatKeeper] Failed to extract JSON array from LLM response:', text);
-      return fallbackResults();
-    }
+    // Phase 3: judgment-parser.ts に集約したマルチラベルパーサーで処理する。
+    // パーサー側で「JSON 抽出 → バリデーション → safe フォールバック」をすべて担当。
+    const parsed: ParsedJudgment[] = parseMultiLabelResponse(
+      text,
+      req.messages.map((m) => m.id),
+    );
 
-    let judgments: Array<{
-      messageId: string;
-      spoiler_category: SpoilerCategory;
-      confidence: number;
-      reason: string;
-    }>;
-    try {
-      judgments = JSON.parse(arrayMatch[0]);
-    } catch (err) {
-      console.error('[FreshChatKeeper] JSON parse failed:', err);
-      return fallbackResults();
-    }
-
-    if (!Array.isArray(judgments)) {
-      console.error('[FreshChatKeeper] LLM response is not an array');
-      return fallbackResults();
-    }
-
-    const judgmentById = new Map(judgments.map((j) => [j.messageId, j]));
-
-    return req.messages.map((m) => {
-      const j = judgmentById.get(m.id);
-      if (!j) {
-        return {
-          messageId: m.id,
-          verdict: uncertainVerdict(req.legacyFilterMode),
-          stage: 2,
-        };
-      }
+    return parsed.map((p) => {
+      const verdict = primaryToVerdict(p.primary, req.context.settings, req.legacyFilterMode);
       return {
-        messageId: m.id,
-        verdict: categoryToVerdict(j.spoiler_category, req.legacyFilterMode),
-        spoilerCategory: j.spoiler_category,
-        confidence: j.confidence,
-        reason: j.reason,
+        messageId: p.messageId,
+        verdict,
+        labels: p.labels,
+        primary: p.primary,
+        confidence: p.confidence,
         stage: 2,
+        ...(p.reasonJa ? { reason: p.reasonJa } : {}),
       };
     });
   } catch (err) {
@@ -487,24 +464,50 @@ function uncertainVerdict(filterMode: LegacyFilterMode): FilterVerdict {
   return filterMode === 'lenient' ? 'allow' : 'uncertain';
 }
 
-function categoryToVerdict(category: SpoilerCategory, filterMode: LegacyFilterMode): FilterVerdict {
-  switch (category) {
-    case 'direct_spoiler':
-      return 'block';
-    case 'foreshadowing_hint':
-      return filterMode === 'lenient' ? 'allow' : 'block';
-    case 'gameplay_hint':
-      return filterMode === 'strict' ? 'block' : 'allow';
+/**
+ * Phase 3: マルチラベル判定の `primary` から verdict を導出する。
+ *
+ * - `safe`: 常に allow
+ * - `spoiler`: 強度の解釈は **LLM プロンプト側で処理済み** （prompt-builder の
+ *   STATIC_INSTRUCTIONS が strict/standard/loose で何をブロックするか明示している）
+ *   なので、proxy は LLM が `spoiler` と判定したものを素直に block する。
+ *   ただし legacy fallback として lenient ユーザー向けに allow に倒すことはしない
+ *   （プロンプトで `loose` の場合は LLM が明示的ネタバレ以外を spoiler と判定しない）
+ * - `harassment` / `spam` / `off_topic` / `backseat`: 該当カテゴリが OFF なら allow
+ *   （LLM はプロンプトの「OFF カテゴリは safe」指示に従って本来 OFF カテゴリを
+ *   返さないはずだが、フェイルセーフ）。ON なら block
+ *
+ * legacyFilterMode は spoiler のみ後方互換性のためにある（chrome-ext v0.3.5 が
+ * 送る `filterMode: 'lenient'` 等で spoiler verdict を調整するレガシー経路）。
+ */
+function primaryToVerdict(
+  primary: JudgmentLabel,
+  settings: FilterSettings,
+  legacyFilterMode: LegacyFilterMode,
+): FilterVerdict {
+  switch (primary) {
     case 'safe':
       return 'allow';
-    default:
-      // LLM ハルシネーションで想定外の spoiler_category（例: "unknown" / typo /
-      // 未知ラベル）が返るケースのフォールバック。安全側に倒し、modeに応じた
-      // uncertain 判定（lenient: allow、それ以外: uncertain）を返す。
+    case 'spoiler':
+      // Phase 2 互換: lenient モードで spoiler 判定が来た場合のみ allow に倒す。
+      // 新しいプロンプトは strength を加味するため lenient で returning spoiler は
+      // 「明示的ネタバレ」のみだが、過剰防衛として残しておく。
+      return 'block';
+    case 'harassment':
+      return settings.categories.harassment?.enabled === true ? 'block' : 'allow';
+    case 'spam':
+      return settings.categories.spam?.enabled === true ? 'block' : 'allow';
+    case 'off_topic':
+      return settings.categories.offTopic?.enabled === true ? 'block' : 'allow';
+    case 'backseat':
+      return settings.categories.backseat?.enabled === true ? 'block' : 'allow';
+    default: {
+      // 既知ラベル以外（型上ありえないが、JSON 由来の値を扱う際の防御）
       console.warn(
-        `[FreshChatKeeper] Unknown spoiler_category: ${String(category)}, falling back to uncertainVerdict`,
+        `[FreshChatKeeper] Unknown primary label: ${String(primary)}, falling back to uncertainVerdict`,
       );
-      return uncertainVerdict(filterMode);
+      return uncertainVerdict(legacyFilterMode);
+    }
   }
 }
 
@@ -535,7 +538,7 @@ export const __test__ = {
   buildGameContextFromLegacy,
   buildGenreTemplateField,
   uncertainVerdict,
-  categoryToVerdict,
+  primaryToVerdict,
   checkRateLimit,
   isValidV2Settings,
 };

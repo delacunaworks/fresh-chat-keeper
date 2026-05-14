@@ -14,6 +14,7 @@ export type {
   FilterVerdict,
   FilterMode,
   UserProgress,
+  JudgmentLabel,
 } from "./types/chat.js";
 
 export type {
