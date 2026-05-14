@@ -28,6 +28,26 @@ export type {
 export type { Stage1Result } from './stage1/index.js';
 export { runStage1, isObviouslySafe } from './stage1/index.js';
 
+// Stage 1.5（Phase 3 / v0.4.0 で実装）
+export type {
+  Stage1_5Result,
+  UserHistoryEntry,
+  UserMessageHistory,
+  ChatHistoryEntry,
+  ChatWideHistory,
+  SpamDetectionResult,
+} from './stage1_5/index.js';
+export {
+  runStage1_5,
+  HistoryStore,
+  USER_HISTORY_MAX,
+  USER_HISTORY_TTL_MS,
+  CHAT_HISTORY_MAX,
+  CHAT_HISTORY_TTL_MS,
+  detectSpam,
+  SPAM_DETECTION_THRESHOLDS,
+} from './stage1_5/index.js';
+
 // Stage 2 building blocks（Phase 2 で実装、judgeMessage 等の統合は後続）
 export type { ModelTier, ModelConfig } from './stage2/model-router.js';
 export { selectModel, getEffectiveModel } from './stage2/model-router.js';
