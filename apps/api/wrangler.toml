@@ -48,7 +48,7 @@ id = "30f59e56c01c473aab81dd2d08f5faf4"  # ⚠ DEPLOY-01: 本番 ID に差し替
 # Chrome Web Store 公開後の extension ID を本番デプロイ時に置き換える:
 #   ALLOWED_ORIGINS = "chrome-extension://<published-extension-id>"
 [vars]
-ALLOWED_ORIGINS = "chrome-extension://placeholder-replace-at-deploy"
+ALLOWED_ORIGINS = "chrome-extension://kgijlbhbpdaenldmchhnlpifimhdeaco"
 
 # 毎日 03:00 UTC に retention cron 起動。judgment_logs を 90 日、
 # revoked consent_records を 30 日で自動削除する（src/db/retention.ts）。
