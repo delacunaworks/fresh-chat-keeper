@@ -1,28 +1,30 @@
 /**
- * Stage 2 LLM 判定用のプロンプトビルダー。
+ * Stage 2 LLM 判定用のプロンプトビルダー（Phase 3 / v0.4.0 マルチラベル対応）。
  *
- * 既存 `apps/proxy/src/index.ts` の判定プロンプトと意味的に等価な内容を、
- * Anthropic API のプロンプトキャッシング（`cache_control: { type: 'ephemeral' }`）
- * 対応の構造で再構築する。
+ * Phase 2 まで: 単一カテゴリ（`spoiler_category`）出力で proxy 側がネタバレ
+ * サブカテゴリ → verdict 変換していた。
+ *
+ * Phase 3: マルチラベル分類（6 ラベル: safe / spoiler / harassment / spam /
+ * off_topic / backseat）に変更。各メッセージに対して `labels[]` と `primary`
+ * （{@link LABEL_PRECEDENCE} で導出）と `confidence` と `reason_ja` を返す
+ * フォーマットを LLM に指示する。
  *
  * 出力構造（{@link buildSystemPrompt}）:
- * - Block 1: 固定指示（役割定義 + ラベル定義 + 出力形式） → 全リクエストで完全に同一なのでキャッシュ可
- * - Block 2: ゲームコンテキスト（gameId / 進行状況 / ジャンル / 動画タイトル）
+ * - Block 1: 固定指示（役割定義 + 6 ラベル定義 + 強度設定の意味 + primary 優先順位 + 出力形式）
+ *   → 全リクエストで完全に同一なのでキャッシュ可
+ * - Block 2: 動的コンテキスト（ゲーム情報 + ユーザーのフィルタ設定）
  *   → 同一ユーザーの同一動画再生中は5分以上同じ内容になりがちなのでキャッシュ可
  *
  * Block 2 は判定対象メッセージを含まない。動的な部分（メッセージ列）は
  * {@link buildUserPrompt} で user role に流し込む。
  *
- * ジャンルテンプレート名のマッピングは `@fresh-chat-keeper/knowledge-base` の
- * `getAllGenreTemplates().name` を参照する。proxy 側の `GENRE_NAMES` ハードコードは
- * 段階的にこちらに移行する（P2-PROXY-01 で proxy から削除予定）。
- *
- * @see dev-docs/phase-2-engine-split.md §プロンプトビルダー
+ * 設計 ground truth: `dev-docs/phase-3-multilabel.md` 「プロンプト設計（詳細）」
  */
 
-import type { Message, JudgmentContext } from '../types.js';
-import type { GameContext } from '@fresh-chat-keeper/shared';
+import type { JudgmentContext } from '../types.js';
+import type { GameContext, FilterSettings } from '@fresh-chat-keeper/shared';
 import { getAllGenreTemplates } from '@fresh-chat-keeper/knowledge-base';
+import { LABEL_PRECEDENCE } from './label-precedence.js';
 
 /**
  * Anthropic API の system 配列に渡せる単一ブロック型。
@@ -44,10 +46,16 @@ export interface BuildSystemPromptOptions {
   supportsCaching: boolean;
 }
 
+/** メッセージの最小入力（buildUserPrompt 用） */
+export interface PromptMessage {
+  id: string;
+  text: string;
+}
+
 /**
  * システムプロンプトを構築する（複数ブロック）。
  *
- * @param context 判定コンテキスト（ゲーム情報・ユーザー設定）
+ * @param context 判定コンテキスト（ゲーム情報 + ユーザー設定）
  * @param options モデルキャッシング対応有無
  * @returns Anthropic API の system 配列にそのまま渡せるブロック列
  */
@@ -64,12 +72,12 @@ export function buildSystemPrompt(
     ...(options.supportsCaching ? { cache_control: { type: 'ephemeral' } } : {}),
   });
 
-  // Block 2: ゲームコンテキスト
-  const ctxText = buildContextDescription(context);
-  if (ctxText) {
+  // Block 2: 動的コンテキスト（ゲーム + ユーザーのフィルタ設定）
+  const block2 = buildDynamicContextBlock(context);
+  if (block2) {
     blocks.push({
       type: 'text',
-      text: ctxText,
+      text: block2,
       ...(options.supportsCaching ? { cache_control: { type: 'ephemeral' } } : {}),
     });
   }
@@ -84,7 +92,7 @@ export function buildSystemPrompt(
  * バッチで複数メッセージを1リクエストにまとめる前提のため、配列形式で送信する。
  * モデルからの返答も messageId をキーにした配列で受ける想定。
  */
-export function buildUserPrompt(messages: Message[]): string {
+export function buildUserPrompt(messages: readonly PromptMessage[]): string {
   if (messages.length === 0) return '';
 
   const lines: string[] = ['判定対象メッセージ（messageId と text のペア）:'];
@@ -97,54 +105,152 @@ export function buildUserPrompt(messages: Message[]): string {
   return lines.join('\n');
 }
 
-// ─── 内部実装 ────────────────────────────────────────────────────
+// ─── 内部実装: Block 1 ────────────────────────────────────────────────
 
 /**
- * 役割定義 + ラベル定義 + 出力形式。
- * 既存 proxy のプロンプトと文言を整合させ、判定精度を維持する。
- * バッチ判定（複数メッセージを1リクエスト）に合わせて出力形式は配列に変更している。
+ * 役割定義 + 6 ラベル定義（強度設定の意味込み）+ primary 優先順位 + 出力形式。
+ *
+ * 完全に静的。`LABEL_PRECEDENCE` 配列を読んで優先順位文字列を生成しているため、
+ * 配列を更新すると本プロンプトも追従する（drift しない）。
+ *
+ * 既存 proxy の `direct_spoiler` / `foreshadowing_hint` / `gameplay_hint` /
+ * `safe` という4種出力からの完全な切り替え。`spoiler` の中の3段階は本プロンプト
+ * 内で `strength` 設定として記述し、proxy のサブカテゴリ → verdict 変換は廃止する。
  */
-const STATIC_INSTRUCTIONS = `あなたはゲームのライブ配信チャットのネタバレ判定AIです。
+const STATIC_INSTRUCTIONS = `あなたは YouTube 配信のチャットコメントを分析するモデレーター AI です。
+各コメントに該当するラベルを **全て** 返してください（マルチラベル分類）。
 
-# 判定基準（spoiler_category）
+# ラベル定義
 
-"direct_spoiler" — 明示的なネタバレ（重度）
-  現在の進行状況より先のストーリー展開、キャラクターの生死、真相、結末などを直接的に述べている。
-  例: 「○○は実は裏切り者だよ」「ラスボスは○○」
+## safe
+問題のないコメント:
+- 感想・応援・共感（「かわいい」「面白い」「がんばれ」）
+- 定型リアクション（「草」「w」「88888」）
+- ゲーム・配信内容への肯定的コメント
 
-"foreshadowing_hint" — 伏線の指摘・匂わせ（中度）
-  先の展開を知っている人が、初見を装いつつ特定の場面・台詞・キャラクターに注意を向けさせるコメント。
-  例: 「ここ覚えておいて」「今の会話重要だよ」「この人怪しいな...（意味深）」
+## spoiler
+ゲームのネタバレ・伏線の匂わせ・攻略ヒント。視聴者の進行状況より先の情報への言及。
+強度判定:
+- strict: 明示的ネタバレ + 匂わせ + 攻略ヒントの全てをブロック
+- standard: 明示的ネタバレ + 匂わせをブロック（攻略ヒントは safe）
+- loose: 明示的ネタバレのみブロック
 
-"gameplay_hint" — 攻略ヒント（軽度）
-  次に何をすべきか、どこに行くべきかなどの指示・アドバイス。ストーリーには触れないが、初見プレイヤーの自力発見・体験を損なう。善意のアドバイスも含む。
-  「負けイベ」「スルーでいい」「戦わなくていい」のようなゲームシステムに関する情報開示もこれに含む。
-  例: 「左の道に行った方がいいよ」「そのボスは炎属性が弱点」「弾使わないほうがいいよ」「ここ負けイベだよ」「アイテム見逃してるよ」「探索甘くない？」
+## harassment
+配信者または他視聴者への攻撃的コメント。
+強度判定:
+- strict: 軽度の否定的コメントも含む（「上手くないね」等）
+- standard: 明確な攻撃・侮辱・差別発言
+- loose: 強い侮辱・差別的発言のみ
 
-"safe" — 安全
-  既に通過した内容への言及、ゲームと無関係な会話、純粋な感想、配信者への応援。
+## spam
+意味のない・繰り返しの・宣伝目的のコメント。
+（spam には強度設定がない。enabled / disabled の二択）
+
+## off_topic
+配信内容と無関係な話題、または他配信者への言及。
+強度判定:
+- strict: 話題の逸脱全般をブロック
+- standard: 他配信者への明確な言及のみブロック
+- loose: 明らかに煽り目的の他配信者言及のみブロック
+
+## backseat
+頼まれていない攻略指示、プレイ批判、押し付けがましい助言（VTuber 配信で特に嫌われる）。
+強度判定:
+- strict: 攻略情報・プレイ批判全般をブロック
+- standard: 明確な指示・否定をブロック
+- loose: 強い押し付け口調のみブロック
+
+# 判定方針
+
+1. **文脈を読む**: 単語だけでなく、配信の流れと照らし合わせる
+2. **複数ラベル可**: 1コメントが複数カテゴリに該当することがある
+   例:「下手すぎ、左に行くべきだろ」→ ["harassment", "backseat"]
+3. **primary（主要ラベル）は最も深刻なもの**を選ぶ。優先度（高い順）:
+   ${LABEL_PRECEDENCE.join(' > ')}
+4. **曖昧な場合は safe に倒す**（誤検出を避ける）
+5. **VTuber 文化への配慮**: 身内ネタ・推し発言は基本的に safe
+6. **OFF のカテゴリ**: 視聴者がそのカテゴリを OFF にしている場合、該当する判定を行わず safe として扱う
 
 # 出力形式
-JSON配列のみで回答（余分なテキストを含めないこと）。各メッセージに対応する判定を、入力と同じ順序で返す:
+
+**JSON 配列のみ** で回答（前後に説明文や \`\`\`json フェンスを付けない）。
+各メッセージに対応する判定を、入力と同じ順序で返す:
 
 [
   {
     "messageId": "<入力の id をそのまま>",
-    "spoiler_category": "direct_spoiler" | "foreshadowing_hint" | "gameplay_hint" | "safe",
+    "labels": ["safe" | "spoiler" | "harassment" | "spam" | "off_topic" | "backseat", ...],
+    "primary": "<labels のうち最も深刻なもの>",
     "confidence": 0.0-1.0,
-    "reason": "判定理由を簡潔に"
+    "reason_ja": "判定理由を簡潔に（safe の場合は省略可）"
   }
 ]`;
+
+// ─── 内部実装: Block 2 ────────────────────────────────────────────────
+
+/**
+ * Block 2: 動的コンテキスト（ゲーム情報 + ユーザーのフィルタ設定）。
+ *
+ * 両者ともに「同一視聴セッション中はあまり変わらない」ため、まとめて
+ * Block 2 に置きキャッシュ可能にする。空文字列を返した場合は Block 2 自体を
+ * 出力しない（後方互換: gameContext も settings も実質デフォルトの場合）。
+ */
+function buildDynamicContextBlock(context: JudgmentContext): string {
+  const gameSection = buildGameContextDescription(context.game);
+  const settingsSection = buildSettingsSection(context.settings);
+
+  // どちらも空 → Block 2 を出力しない
+  if (!gameSection && !settingsSection) return '';
+
+  const sections: string[] = [];
+  if (gameSection) sections.push(gameSection);
+  if (settingsSection) sections.push(settingsSection);
+  return sections.join('\n\n');
+}
+
+/**
+ * 視聴者のフィルタ設定セクション（カテゴリ ON/OFF + 強度）を構築する。
+ *
+ * LLM はこれを読んで「OFF のカテゴリは判定しない」「強度に応じた基準を適用する」と
+ * 振る舞う。spam は強度設定なし（enabled のみ）。
+ *
+ * categories.harassment 等は型上 optional だが、`migrateSettings` を通れば
+ * 必ず populate されているため、optional chain で安全に読む。未設定は OFF 扱い。
+ */
+function buildSettingsSection(settings: FilterSettings): string {
+  const lines: string[] = ['# 視聴者のフィルタ設定（カテゴリ ON/OFF + 強度）'];
+  const cats = settings.categories;
+
+  lines.push(`- spoiler: ${formatEnabled(cats.spoiler.enabled)} / 強度 ${cats.spoiler.strength}`);
+  lines.push(
+    `- harassment: ${formatEnabled(cats.harassment?.enabled)} / 強度 ${cats.harassment?.strength ?? 'standard'}`,
+  );
+  lines.push(`- spam: ${formatEnabled(cats.spam?.enabled)}`);
+  lines.push(
+    `- off_topic: ${formatEnabled(cats.offTopic?.enabled)} / 強度 ${cats.offTopic?.strength ?? 'standard'}`,
+  );
+  lines.push(
+    `- backseat: ${formatEnabled(cats.backseat?.enabled)} / 強度 ${cats.backseat?.strength ?? 'standard'}`,
+  );
+  lines.push('');
+  lines.push(
+    'OFF のカテゴリに該当しそうなコメントは labels に含めず、結果的に safe になるよう判定してください。',
+  );
+
+  return lines.join('\n');
+}
+
+function formatEnabled(enabled: boolean | undefined): string {
+  return enabled === true ? 'ON' : 'OFF';
+}
 
 /**
  * ゲームコンテキスト記述を構築する。
  *
- * 既存 proxy の `buildContextDescription` を移植。条件分岐を保ち、
- * judgment-engine 側の GameContext 構造（progressType / currentChapter / completedEvents /
- * genreTemplate / gameTitle）を使う点だけ差し替える。
+ * 既存実装を維持。条件分岐を保ち、judgment-engine 側の GameContext 構造
+ * （progressType / currentChapter / completedEvents / genreTemplate / gameTitle）を使う。
  */
-function buildContextDescription(context: JudgmentContext): string {
-  const game = context.game;
+function buildGameContextDescription(game: GameContext | undefined): string {
   if (!game) return '';
 
   const parts: string[] = ['# ゲームコンテキスト'];
@@ -180,9 +286,7 @@ function buildContextDescription(context: JudgmentContext): string {
     );
   }
 
-  // 何も追加されなかった場合（gameId も genreTemplate も gameTitle もない）は空文字
   if (parts.length === 1) return '';
-
   return parts.join('\n');
 }
 
@@ -191,14 +295,10 @@ const UNSET_PROGRESS = '未設定（ゲーム開始前として扱う）';
 function formatProgress(game: GameContext): string {
   switch (game.progressType) {
     case 'chapter':
-      // v0.3.1 PROG-01: 「視聴中セマンティクス」を反映した文言。
-      // currentChapter は「現在視聴中の章（未通過）」であり、その章自身のネタバレも
-      // フィルタ対象。LLM プロンプトでもこの解釈を明示する。
       return game.currentChapter
         ? `現在チャプター「${game.currentChapter}」を視聴中（未通過）`
         : UNSET_PROGRESS;
     case 'event':
-      // event モードの completedEventIds は「通過済み」の意味で正しい（変更なし）
       return game.completedEvents && game.completedEvents.length > 0
         ? `通過済みイベント: ${game.completedEvents.join(', ')}`
         : UNSET_PROGRESS;
@@ -207,10 +307,6 @@ function formatProgress(game: GameContext): string {
   }
 }
 
-/**
- * `genreTemplate` ID から表示名を解決する。
- * 知識ベース上に該当 ID がなければ ID をそのまま返す（呼び出し側でフォールバック）。
- */
 function resolveGenreName(templateId: string | undefined): string | null {
   if (!templateId) return null;
   const found = getAllGenreTemplates().find((t) => t.id === templateId);

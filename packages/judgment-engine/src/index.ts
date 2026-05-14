@@ -62,8 +62,16 @@ export { JudgmentCache, createMemoryStorage } from './stage2/cache.js';
 export type { MockTransportHandler } from './stage2/api-client.js';
 export { createMockTransport, createFailingTransport } from './stage2/api-client.js';
 
-export type { SystemPromptBlock, BuildSystemPromptOptions } from './stage2/prompt-builder.js';
+export type {
+  SystemPromptBlock,
+  BuildSystemPromptOptions,
+  PromptMessage,
+} from './stage2/prompt-builder.js';
 export { buildSystemPrompt, buildUserPrompt } from './stage2/prompt-builder.js';
+
+// Phase 3: LLM 出力 labels[] から primary を導出するための共通優先順位定数。
+// prompt-builder と judgment-parser の両方から参照される（単一の真実）
+export { LABEL_PRECEDENCE, derivePrimary } from './stage2/label-precedence.js';
 
 export type { Stage2BatcherOptions } from './stage2/batcher.js';
 export { Stage2Batcher } from './stage2/batcher.js';
