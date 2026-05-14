@@ -27,7 +27,7 @@ function buildSettings(spamEnabled: boolean | undefined): FilterSettings {
     categories.spam = { enabled: spamEnabled };
   }
   return {
-    version: 2,
+    version: 3,
     enabled: true,
     displayMode: 'placeholder',
     filterMode: 'live',

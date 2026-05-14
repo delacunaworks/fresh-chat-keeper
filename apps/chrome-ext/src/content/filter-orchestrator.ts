@@ -108,8 +108,13 @@ function buildJudgmentContext(settings: Settings, videoTitle: string | undefined
   const isKBGame = settings.gameId !== 'none' && settings.gameId !== 'other';
   const game = buildGameContext(settings, isKBGame, videoTitle);
 
+  // Phase 3 / v3: canonical FilterSettings は v3 形式（マルチラベル + userBlocks）。
+  // chrome-ext 内部の {@link Settings} には新カテゴリの ON/OFF を保持する UI が
+  // まだ存在しない（B3 で追加予定）ので、ここでは spoiler のみアクティブな v3 を
+  // 構築する。新カテゴリ optional は未指定のまま渡しても judgment-engine 側で
+  // 安全に扱える（runStage1_5 は categories.spam?.enabled === true でのみ発火）。
   const filterSettings: FilterSettings = {
-    version: 2,
+    version: 3,
     enabled: settings.enabled,
     displayMode: settings.displayMode,
     filterMode: 'archive', // v2 の filterMode は archive/live。既存 chrome-ext には対応情報なし → archive 既定

@@ -7,7 +7,7 @@ import type { JudgmentContext, Message } from '../../src/types.js';
 import type { FilterSettings, GameContext } from '@fresh-chat-keeper/shared';
 
 const SETTINGS: FilterSettings = {
-  version: 2,
+  version: 3,
   enabled: true,
   displayMode: 'placeholder',
   filterMode: 'archive',

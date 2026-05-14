@@ -252,7 +252,7 @@ function normalizeRequest(body: Record<string, unknown>): NormalizedRequest {
   const filterMode: LegacyFilterMode = legacy.filterMode ?? 'standard';
   const game = buildGameContextFromLegacy(legacy);
   const settings: FilterSettings = {
-    version: 2,
+    version: 3,
     enabled: true,
     displayMode: 'placeholder',
     filterMode: 'archive',
