@@ -80,6 +80,10 @@ const MENU_HEIGHT_EST = 40;
 const STYLE_ELEMENT_ID = 'fck-action-menu-styles';
 const TRIGGER_CLASS = 'fck-trigger';
 const TRIGGER_VIS_ATTR = 'data-fck-trigger-vis';
+/** #menu 実測前 / #menu 不在時のフォールバック right（px、CSS と一致） */
+const TRIGGER_FALLBACK_RIGHT_PX = 8;
+/** トリガ右端と #menu 左端の間隔（px） */
+const TRIGGER_MENU_GAP_PX = 6;
 
 /**
  * 行内トリガの表示モード（B5-fix）。archive.ts が設定値で
@@ -92,9 +96,11 @@ const STYLE_TEXT = `
 .${TRIGGER_CLASS} {
   position: absolute;
   top: 2px;
-  /* YouTube ネイティブ 3 点 #menu（右端 ~4px / 幅 ~24px）の少し左。
-     ※ #menu 親要素・余白は静的に断定できないため実機検証要（手動テスト）。 */
-  right: 34px;
+  /* B5-fix: フォールバック right（#menu 実測前 / #menu 不在時）。
+     #menu が在る場合は JS が実測して #menu の左へ動的上書きする
+     （positionTriggerLeftOfNativeMenu）。固定 34px で #menu と重なり
+     クリックを奪っていた問題を解消。 */
+  right: 8px;
   width: 20px;
   height: 20px;
   padding: 0;
@@ -113,7 +119,10 @@ const STYLE_TEXT = `
      data-fck-trigger-vis="always" のときだけ常時薄表示にする。 */
   opacity: 0;
   transition: opacity 0.12s;
-  z-index: 60;
+  /* B5-fix: #menu と物理的に重ならない（左に動的配置）ので高い z-index は
+     不要。本文より前に出れば十分な最小値にし、万一レイアウト過渡で
+     重なっても #menu のヒットテストを奪わないようにする。 */
+  z-index: 1;
 }
 .${TRIGGER_CLASS}[data-fck-trigger-vis="always"] { opacity: 0.2; }
 yt-live-chat-text-message-renderer:hover .${TRIGGER_CLASS},
@@ -273,11 +282,17 @@ export class ActionMenuManager {
   ): void {
     if (renderer.querySelector(`:scope > .${TRIGGER_CLASS}`)) return;
 
-    // 絶対配置の子を載せるため renderer を配置コンテキストにする。
-    // YouTube renderer は #menu/#deleted-state のため通常 position:relative
-    // だが、static の場合のみ relative を補う（実機検証要）。
-    const pos = getComputedStyle(renderer).position;
-    if (pos === 'static') renderer.style.position = 'relative';
+    // B5-fix: 配置コンテキストの確保。YouTube `#menu`（3 点）は renderer 直下で
+    // absolute 配置され機能している＝renderer は既に containing block。よって
+    // #menu が在る場合は renderer.style.position を**触らない**（副作用回避）。
+    // #menu が無い renderer のみ、自前トリガ絶対配置のため static→relative を補う。
+    const nativeMenu = renderer.querySelector<HTMLElement>(':scope > #menu');
+    if (
+      !nativeMenu &&
+      getComputedStyle(renderer).position === 'static'
+    ) {
+      renderer.style.position = 'relative';
+    }
 
     const snippet = buildPreviewText(target.text).short;
     const trigger = document.createElement('button');
@@ -299,6 +314,42 @@ export class ActionMenuManager {
       this.toggleMenu({ ...target, messageEl: renderer }, trigger);
     });
     renderer.appendChild(trigger);
+
+    // B5-fix: YouTube ネイティブ 3 点 #menu のクリックを奪わないよう、
+    // #menu を実測して**その左**に動的配置する（CSS の固定 right は推測値で
+    // #menu と重なり、DOM 後ろ + z-index で #menu のヒットテストを奪っていた）。
+    // #menu は遅延生成・遅延レイアウトされ得るため、初回 rAF で測り、取れ
+    // なければ行ホバー時に再測定する（取得失敗時は CSS フォールバック right）。
+    this.positionTriggerLeftOfNativeMenu(renderer, trigger);
+    renderer.addEventListener('mouseenter', () => {
+      if (trigger.dataset.fckPositioned === 'true') return;
+      this.positionTriggerLeftOfNativeMenu(renderer, trigger);
+    });
+  }
+
+  /**
+   * 行内トリガを同 renderer の `#menu`（YouTube ネイティブ 3 点）の左に
+   * 実測配置する。`#menu` が見つからない/未レイアウト（幅 0）の場合は
+   * CSS フォールバック right のままにし、本文や #menu に被らないようにする。
+   */
+  private positionTriggerLeftOfNativeMenu(
+    renderer: HTMLElement,
+    trigger: HTMLElement,
+  ): void {
+    requestAnimationFrame(() => {
+      const nativeMenu = renderer.querySelector<HTMLElement>(':scope > #menu');
+      if (!nativeMenu) return; // #menu 無し → CSS フォールバック right を使用
+      const rRect = renderer.getBoundingClientRect();
+      const mRect = nativeMenu.getBoundingClientRect();
+      if (mRect.width === 0 || rRect.width === 0) return; // 未レイアウト→再測定待ち
+      // トリガ右端を #menu 左端の TRIGGER_MENU_GAP_PX 左に置く。
+      const rightPx = Math.max(
+        TRIGGER_FALLBACK_RIGHT_PX,
+        rRect.right - mRect.left + TRIGGER_MENU_GAP_PX,
+      );
+      trigger.style.right = `${rightPx}px`;
+      trigger.dataset.fckPositioned = 'true';
+    });
   }
 
   /** 同じトリガなら閉じ、違う/未表示なら開く。 */
