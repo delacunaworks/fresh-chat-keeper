@@ -98,6 +98,13 @@ export function verdictFromCache(entry: JudgeCacheEntry, filterMode: FilterMode)
       case 'backseat':
         // B3: カテゴリ別 ON/OFF UI 未実装のため allow（B4 で拡張）
         return 'allow';
+      default: {
+        // B4a hardening D: コンパイル時網羅チェック。JudgmentLabel に
+        // ラベルを追加して上の case を足し忘れると型エラーになる。
+        const _exhaustive: never = entry.primary;
+        void _exhaustive;
+        return 'allow';
+      }
     }
   }
 

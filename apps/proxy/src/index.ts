@@ -558,7 +558,11 @@ function primaryToVerdict(
     case 'backseat':
       return settings.categories.backseat?.enabled === true ? 'block' : 'allow';
     default: {
-      // 既知ラベル以外（型上ありえないが、JSON 由来の値を扱う際の防御）
+      // B4a hardening D: コンパイル時網羅チェック。JudgmentLabel に新ラベルを
+      // 足して case を忘れると型エラー（never 代入不可）になる。
+      const _exhaustive: never = primary;
+      void _exhaustive;
+      // 実行時防御: JSON 由来で型外の値が来た場合は安全側 uncertain + warn
       console.warn(
         `[FreshChatKeeper] Unknown primary label: ${String(primary)}, falling back to uncertainVerdict`,
       );
