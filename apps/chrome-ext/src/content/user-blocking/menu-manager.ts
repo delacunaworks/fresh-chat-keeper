@@ -29,6 +29,7 @@
  */
 
 import { announce } from './live-region.js';
+import type { TriggerVisibility } from '../../shared/settings.js';
 import {
   buildReportForm,
   buildPreviewText,
@@ -78,6 +79,14 @@ const MENU_WIDTH_EST = 160;
 const MENU_HEIGHT_EST = 40;
 const STYLE_ELEMENT_ID = 'fck-action-menu-styles';
 const TRIGGER_CLASS = 'fck-trigger';
+const TRIGGER_VIS_ATTR = 'data-fck-trigger-vis';
+
+/**
+ * 行内トリガの表示モード（B5-fix）。archive.ts が設定値で
+ * {@link ActionMenuManager.setTriggerVisibility} を呼んで更新する。
+ * 既定 hover_only。新規 attach トリガと既存トリガの両方に反映する。
+ */
+let currentTriggerVisibility: TriggerVisibility = 'hover_only';
 
 const STYLE_TEXT = `
 .${TRIGGER_CLASS} {
@@ -100,18 +109,25 @@ const STYLE_TEXT = `
   font-size: 13px;
   line-height: 1;
   cursor: pointer;
-  opacity: 0.2;
+  /* B5-fix: 既定は hover_only（通常は非表示。行ホバー/フォーカス/展開で出る）。
+     data-fck-trigger-vis="always" のときだけ常時薄表示にする。 */
+  opacity: 0;
   transition: opacity 0.12s;
   z-index: 60;
 }
+.${TRIGGER_CLASS}[data-fck-trigger-vis="always"] { opacity: 0.2; }
 yt-live-chat-text-message-renderer:hover .${TRIGGER_CLASS},
 yt-live-chat-paid-message-renderer:hover .${TRIGGER_CLASS},
 .${TRIGGER_CLASS}:hover,
 .${TRIGGER_CLASS}:focus-visible,
 .${TRIGGER_CLASS}[aria-expanded="true"] { opacity: 1; }
 .${TRIGGER_CLASS}:focus-visible { outline: 2px solid #3b82f6; outline-offset: 1px; }
-/* タッチ（hover 不可）はホバーで濃くできないので常時可視寄りにする */
-@media (hover: none) { .${TRIGGER_CLASS} { opacity: 0.6; } }
+/* タッチ（hover 不可）はホバーで濃くできないので、モードに関わらず常時可視寄り。
+   always の属性セレクタ（specificity 高）に負けないよう同セレクタも上書きする。 */
+@media (hover: none) {
+  .${TRIGGER_CLASS},
+  .${TRIGGER_CLASS}[data-fck-trigger-vis="always"] { opacity: 0.6; }
+}
 
 .fck-action-menu {
   position: fixed;
@@ -271,6 +287,8 @@ export class ActionMenuManager {
     trigger.tabIndex = 0;
     trigger.setAttribute('aria-haspopup', 'menu');
     trigger.setAttribute('aria-expanded', 'false');
+    // B5-fix: 表示モード（hover_only / always）を data 属性で表現。CSS が参照。
+    trigger.setAttribute(TRIGGER_VIS_ATTR, currentTriggerVisibility);
     trigger.setAttribute(
       'aria-label',
       `${target.authorDisplayName || 'このユーザー'} のコメント「${snippet}」への操作`,
@@ -531,6 +549,19 @@ export class ActionMenuManager {
     // フォームは縦長になりがち。再計測して配置し直す。
     this.reposition();
     form.focusFirst();
+  }
+
+  /**
+   * 行内トリガの表示モードを設定する（B5-fix）。
+   * 新規 attach トリガに加え、**既存の attach 済みトリガ全件**にも即時反映
+   * する（data 属性切替なので再 attach 不要）。archive.ts が起動時の設定値と
+   * chrome.storage.onChanged で呼ぶ。
+   */
+  setTriggerVisibility(mode: TriggerVisibility): void {
+    currentTriggerVisibility = mode;
+    document
+      .querySelectorAll<HTMLElement>(`.${TRIGGER_CLASS}`)
+      .forEach((el) => el.setAttribute(TRIGGER_VIS_ATTR, mode));
   }
 
   /** テスト/デバッグ用: 現在表示中のターゲットを返す（なければ null）。 */

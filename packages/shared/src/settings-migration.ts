@@ -57,6 +57,7 @@ function getDefaultSettings(): FilterSettings {
     userBlocks: { channelIds: [], metadata: {} },
     customBlockWords: [],
     userTier: 'free',
+    triggerVisibility: 'hover_only',
   };
 }
 
@@ -83,6 +84,13 @@ function isFilterStrength(value: unknown): value is 'loose' | 'standard' | 'stri
 /** v2 / v3 の userTier 値か */
 function isUserTier(value: unknown): value is FilterSettings['userTier'] {
   return value === 'free' || value === 'premium' || value === 'streamer';
+}
+
+/** v3 の triggerVisibility 値か（B5-fix 新規） */
+function isTriggerVisibility(
+  value: unknown,
+): value is NonNullable<FilterSettings['triggerVisibility']> {
+  return value === 'hover_only' || value === 'always';
 }
 
 /** GameContext として妥当か（progressType だけ最低限チェック） */
@@ -201,6 +209,10 @@ function ensureV3Shape(raw: Record<string, unknown>): FilterSettings {
     : defaults.customBlockWords;
   const userTier = isUserTier(raw.userTier) ? raw.userTier : defaults.userTier;
   const gameContext = isGameContext(raw.gameContext) ? raw.gameContext : undefined;
+  // B5-fix: 未設定 / 不正値は既定 'hover_only'（既存 v3 も後方互換）
+  const triggerVisibility = isTriggerVisibility(raw.triggerVisibility)
+    ? raw.triggerVisibility
+    : defaults.triggerVisibility;
 
   return {
     version: 3,
@@ -211,6 +223,7 @@ function ensureV3Shape(raw: Record<string, unknown>): FilterSettings {
     userBlocks: ensureUserBlocksV3(raw.userBlocks),
     customBlockWords,
     userTier,
+    triggerVisibility,
     ...(gameContext ? { gameContext } : {}),
   };
 }
@@ -262,6 +275,7 @@ function migrateV1ToV3(v1: FilterSettingsV1): FilterSettings {
     userBlocks: { channelIds: [], metadata: {} },
     customBlockWords: isStringArray(v1.customBlockWords) ? v1.customBlockWords : [],
     userTier: 'free',
+    triggerVisibility: 'hover_only',
   };
 
   if (isGameContext(v1.gameContext)) {

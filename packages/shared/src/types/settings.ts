@@ -162,6 +162,15 @@ export interface FilterSettingsV3 {
   userTier: 'free' | 'premium' | 'streamer';
   /** プレイ中のゲーム情報。設定されていない場合は判定時に未指定として扱う */
   gameContext?: GameContext;
+  /**
+   * 行内トリガ（ブロック/報告アイコン）の表示モード（Phase 3 B5-fix 新規）。
+   * - `hover_only`（既定）: 行ホバー時のみ表示
+   * - `always`: 常に薄く表示
+   *
+   * 型上は optional（既存 v3 データに無くても後方互換。migrateSettings は
+   * 未設定なら `'hover_only'` を populate する）。
+   */
+  triggerVisibility?: 'hover_only' | 'always';
 }
 
 /**

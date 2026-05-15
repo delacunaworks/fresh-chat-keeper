@@ -292,6 +292,10 @@ export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
     .then((settings) => {
       currentSettings = settings;
       currentKeywords = buildKeywordsFromSettings(settings);
+      // B5-fix: 行内トリガの表示モードを設定値で初期化（既定 hover_only）。
+      actionMenuManager.setTriggerVisibility(
+        settings.triggerVisibility ?? 'hover_only',
+      );
 
       // Phase 2.5: opt-in している場合のみ collection-emit を起動。
       // anonToken が空でも初期化は進める（あとから resolve した時点で
@@ -320,7 +324,29 @@ export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
         currentSettings = next;
         currentKeywords = buildKeywordsFromSettings(next);
 
+        // B5-fix: トリガ表示モード変更を既存トリガ全件へ即時反映（再 attach 不要）。
+        const triggerVisChanged =
+          prev?.triggerVisibility !== next.triggerVisibility;
+        if (triggerVisChanged) {
+          actionMenuManager.setTriggerVisibility(
+            next.triggerVisibility ?? 'hover_only',
+          );
+        }
+
         if (!itemsContainerRef) return;
+
+        // トリガ表示モードのみの変更はフィルタに無関係 → 再フィルタしない。
+        const triggerVisOnlyChanged =
+          triggerVisChanged &&
+          prev?.displayMode === next.displayMode &&
+          prev?.enabled === next.enabled &&
+          prev?.gameId === next.gameId &&
+          prev?.filterMode === next.filterMode &&
+          JSON.stringify(prev?.progressByGame) === JSON.stringify(next.progressByGame) &&
+          JSON.stringify(prev?.customNgWords) === JSON.stringify(next.customNgWords) &&
+          JSON.stringify(prev?.selectedGenreTemplates) === JSON.stringify(next.selectedGenreTemplates) &&
+          JSON.stringify(prev?.categories) === JSON.stringify(next.categories);
+        if (triggerVisOnlyChanged) return;
 
         if (onlyDisplayModeChanged) {
           // displayMode のみ変更: 復元→再フィルタせず、表示方式だけ直接切り替える（フラッシュ防止）

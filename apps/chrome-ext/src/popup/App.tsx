@@ -8,6 +8,7 @@ import {
   getOrCreateAnonToken,
   type FilterMode,
   type DisplayMode,
+  type TriggerVisibility,
   type GameProgress,
   type Settings,
   type Stage2Usage,
@@ -790,6 +791,25 @@ export default function App() {
             {settings.displayMode === 'placeholder'
               ? '「⚠ フィルタされました」に書き換え（クリックで表示）'
               : '完全に非表示（Flow Chat等の他拡張には効かない場合あり）'}
+          </p>
+        </Section>
+
+        {/* 行内トリガ（ブロック/報告アイコン）の表示（B5-fix） */}
+        <Section label="ブロック/報告アイコン">
+          <SegmentedControl
+            options={[
+              { value: 'hover_only', label: 'ホバー時のみ' },
+              { value: 'always', label: '常に薄く表示' },
+            ]}
+            value={settings.triggerVisibility ?? 'hover_only'}
+            onChange={(v) =>
+              update({ triggerVisibility: v as TriggerVisibility })
+            }
+          />
+          <p className="text-xs text-gray-400 mt-1.5">
+            {(settings.triggerVisibility ?? 'hover_only') === 'hover_only'
+              ? 'コメントにマウスを乗せた時だけ ⋯ を表示（既定）'
+              : '常に薄く ⋯ を表示し、ホバーで濃くなる'}
           </p>
         </Section>
       </div>

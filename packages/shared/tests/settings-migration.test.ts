@@ -44,6 +44,7 @@ const DEFAULT_V3: FilterSettings = {
   userBlocks: { channelIds: [], metadata: {} },
   customBlockWords: [],
   userTier: 'free',
+  triggerVisibility: 'hover_only',
 };
 
 describe('migrateSettings (v3)', () => {
@@ -109,6 +110,7 @@ describe('migrateSettings (v3)', () => {
         userBlocks: { channelIds: [], metadata: {} },
         customBlockWords: ['秘密', 'ネタバレ注意'],
         userTier: 'free',
+        triggerVisibility: 'hover_only',
         gameContext: {
           gameId: 'ace-attorney-1',
           progressType: 'chapter',
@@ -290,6 +292,7 @@ describe('migrateSettings (v3)', () => {
         },
         customBlockWords: ['a', 'b'],
         userTier: 'premium',
+        triggerVisibility: 'always',
         gameContext: { gameId: 'g', progressType: 'none' },
       };
       const result = migrateSettings(v3);
@@ -324,6 +327,62 @@ describe('migrateSettings (v3)', () => {
       const once = migrateSettings(v2);
       const twice = migrateSettings(once);
       expect(twice).toEqual(once);
+    });
+  });
+
+  describe('triggerVisibility（B5-fix）', () => {
+    it('v3 で triggerVisibility 未設定 → 既定 hover_only を populate', () => {
+      const result = migrateSettings({
+        version: 3,
+        enabled: true,
+        displayMode: 'placeholder',
+        filterMode: 'archive',
+        categories: { spoiler: { enabled: true, strength: 'standard' } },
+        customBlockWords: [],
+        userTier: 'free',
+      });
+      expect(result.triggerVisibility).toBe('hover_only');
+    });
+
+    it('v3 の triggerVisibility=always は保持', () => {
+      const result = migrateSettings({
+        version: 3,
+        enabled: true,
+        displayMode: 'placeholder',
+        filterMode: 'archive',
+        categories: { spoiler: { enabled: true, strength: 'standard' } },
+        customBlockWords: [],
+        userTier: 'free',
+        triggerVisibility: 'always',
+      });
+      expect(result.triggerVisibility).toBe('always');
+    });
+
+    it('triggerVisibility 不正値 → 既定 hover_only に倒す', () => {
+      const result = migrateSettings({
+        version: 3,
+        enabled: true,
+        displayMode: 'placeholder',
+        filterMode: 'archive',
+        categories: { spoiler: { enabled: true, strength: 'standard' } },
+        customBlockWords: [],
+        userTier: 'free',
+        triggerVisibility: 'sometimes',
+      });
+      expect(result.triggerVisibility).toBe('hover_only');
+    });
+
+    it('v2 → v3 で triggerVisibility=hover_only を補完', () => {
+      const result = migrateSettings({
+        version: 2,
+        enabled: true,
+        displayMode: 'placeholder',
+        filterMode: 'archive',
+        categories: { spoiler: { enabled: true, strength: 'standard' } },
+        customBlockWords: [],
+        userTier: 'free',
+      });
+      expect(result.triggerVisibility).toBe('hover_only');
     });
   });
 

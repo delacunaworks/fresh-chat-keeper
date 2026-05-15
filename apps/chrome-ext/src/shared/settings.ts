@@ -8,6 +8,16 @@ import type { MisreportEntry } from '@fresh-chat-keeper/shared';
 export type FilterMode = 'strict' | 'standard' | 'lenient';
 export type DisplayMode = 'placeholder' | 'hidden';
 
+/**
+ * 行内トリガ（ブロック/報告アイコン ⋯）の表示モード（B5-fix）。
+ * - `hover_only`（既定）: 行ホバー時のみ表示（YouTube `#menu` と同挙動。
+ *   通常は何も出ず、折り返し本文への被り・常時の視界ノイズが消える）
+ * - `always`: 常に薄く表示し、ホバーで濃く（B5 までの挙動）
+ *
+ * タッチ環境（hover 不可）はモードに関わらず常時可視寄り（CSS 側で担保）。
+ */
+export type TriggerVisibility = 'hover_only' | 'always';
+
 /** Phase 3 マルチラベル新カテゴリの強度（spam は強度なし） */
 export type CategoryStrength = 'loose' | 'standard' | 'strict';
 
@@ -77,6 +87,12 @@ export interface Settings {
    * {@link DEFAULT_SETTINGS}.categories（全 OFF）とマージされる。
    */
   categories?: CategorySettings;
+  /**
+   * 行内トリガ（⋯ ブロック/報告アイコン）の表示モード（B5-fix）。
+   * 既存ユーザーの保存値には存在しないため optional。未設定時は
+   * {@link DEFAULT_SETTINGS}.triggerVisibility（`hover_only`）にマージされる。
+   */
+  triggerVisibility?: TriggerVisibility;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -98,6 +114,8 @@ export const DEFAULT_SETTINGS: Settings = {
     offTopic: { enabled: false, strength: 'standard' },
     backseat: { enabled: false, strength: 'standard' },
   },
+  // B5-fix: 既定は hover_only（YouTube #menu と同挙動。通常は何も出さない）
+  triggerVisibility: 'hover_only',
 };
 
 /** メイン設定のストレージキー。書き込みはポップアップのみ行う。 */
