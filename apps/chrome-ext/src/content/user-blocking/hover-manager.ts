@@ -18,6 +18,17 @@
  * `<style>` を 1 回だけ注入する（chat-dom.ts の inline style 方針と同系統）。
  */
 
+// A-3 補強（B4b）: 単一リージョン使い回しをやめ、キュー化 polite/assertive の
+// 共有モジュールへ委譲（流去告知 + ブロック完了 + 報告完了が近接発火しても
+// 取りこぼさない）。誤判定報告フォームは report-form.ts に分離。
+import { announce } from './live-region.js';
+import {
+  buildReportForm,
+  buildPreviewText,
+  type ReportKind,
+  type ReportedLabel,
+} from './report-form.js';
+
 /** アクションバーの操作対象（1 コメント分のメタ情報） */
 export interface ActionBarTarget {
   /** コメント要素。流れて消えると null 化されるが、以下のメタは保持される */
@@ -28,14 +39,28 @@ export interface ActionBarTarget {
   authorDisplayName: string;
   /** メッセージ要素の一意キー（同一コメント再ホバー判定用） */
   messageKey: string;
+  /**
+   * コメント本文（P3-UI-06 プレビュー用）。流れて消えても保持されるよう
+   * attach 時にスナップショットする。
+   */
+  text: string;
 }
 
-/** UI-02 / UI-03 が注入するアクションハンドラ */
+/** UI-02 / UI-03 / P3-UI-06 が注入するアクションハンドラ */
 export interface ActionBarCallbacks {
-  /** 🚫 ブロック（UI-02 が blockUser を注入） */
+  /** 🚫 ブロック（UI-02 が blockUser を注入）。channelId 空なら未注入扱いで非表示 */
   onBlock: (channelId: string, displayName: string) => void | Promise<void>;
-  /** ⚠️ 誤判定報告（任意、未注入ならボタン非表示） */
-  onReport?: (target: ActionBarTarget) => void;
+  /**
+   * ⚠️ 誤判定報告（P3-UI-06）。フォームで選ばれた reportedLabel を渡す
+   * （スキップ時 undefined）。reportKind は archive 側が表示状態から自動判定。
+   * 未注入ならボタン非表示。
+   */
+  onReport?: (target: ActionBarTarget, reportedLabel: ReportedLabel | undefined) => void;
+  /**
+   * 報告フォームの文言用に FP/FN を解決する（フィルタ済み→FP / 表示中→FN）。
+   * 未注入時は 'false_negative' 既定。
+   */
+  getReportKind?: (target: ActionBarTarget) => ReportKind;
   /** 📊 統計（任意、Phase 3.5 で本実装。未注入ならボタン非表示） */
   onStats?: (channelId: string, displayName: string) => void;
 }
@@ -88,30 +113,6 @@ function ensureStylesInjected(): void {
   (document.head ?? document.documentElement).appendChild(style);
 }
 
-const LIVE_REGION_ID = 'fck-ab-live-region';
-
-/**
- * A-4: 視覚に出ない aria-live 領域へメッセージを流して SR に告知する。
- * 空挿入→次フレームでテキスト投入し読み上げを確実化（A-3 と同方針）。
- */
-function announce(message: string): void {
-  let region = document.getElementById(LIVE_REGION_ID);
-  if (!region) {
-    region = document.createElement('div');
-    region.id = LIVE_REGION_ID;
-    region.setAttribute('role', 'status');
-    region.setAttribute('aria-live', 'polite');
-    // 視覚的に隠す（SR からは読める）
-    region.style.cssText =
-      'position:fixed;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;';
-    document.body.appendChild(region);
-  }
-  region.textContent = '';
-  const el = region;
-  requestAnimationFrame(() => {
-    el.textContent = message;
-  });
-}
 
 /** 矩形（getBoundingClientRect の最小サブセット）。テスト用に純粋化。 */
 export interface RectLike {
@@ -209,20 +210,24 @@ export class ActionBarManager {
     if (isTouch) {
       messageEl.addEventListener('click', (e) => {
         e.stopPropagation();
-        this.showActionBar(messageEl, target);
+        this.showActionBar(messageEl, target, false);
       });
       // A-1: タッチ環境でもキーボード（外付け等）に配慮し focusin も拾う
-      messageEl.addEventListener('focusin', () => this.showActionBar(messageEl, target));
+      messageEl.addEventListener('focusin', () =>
+        this.showActionBar(messageEl, target, true),
+      );
       return;
     }
 
     messageEl.addEventListener('mouseenter', () =>
-      this.showActionBar(messageEl, target),
+      // 🟡(B4b): マウス起点では first-focus しない（連続ホバーでページの
+      // フォーカス/スクロールを奪わない）
+      this.showActionBar(messageEl, target, false),
     );
     messageEl.addEventListener('mouseleave', () => this.scheduleHide());
-    // A-1: キーボードフォーカスでも開く
+    // A-1: キーボードフォーカスでも開く（こちらは first-focus する）
     messageEl.addEventListener('focusin', () =>
-      this.showActionBar(messageEl, target),
+      this.showActionBar(messageEl, target, true),
     );
     // A-1: フォーカスがコメント行からもバーからも外れたら閉じる（Tab 離脱）
     messageEl.addEventListener('focusout', (e) =>
@@ -233,6 +238,7 @@ export class ActionBarManager {
   showActionBar(
     messageEl: HTMLElement,
     target: Omit<ActionBarTarget, 'messageEl'>,
+    viaKeyboard: boolean,
   ): void {
     if (!this.callbacks) return;
 
@@ -246,8 +252,9 @@ export class ActionBarManager {
 
     const fullTarget: ActionBarTarget = { ...target, messageEl };
     const actionBar = this.createActionBar(fullTarget);
-    this.positionActionBar(actionBar, messageEl);
     document.body.appendChild(actionBar);
+    // A-6: 実 DOM サイズ確定後に配置（縦長 UI 対応）
+    this.repositionFor(actionBar, messageEl);
 
     actionBar.addEventListener('mouseenter', () => this.cancelHide());
     actionBar.addEventListener('mouseleave', () => this.scheduleHide());
@@ -255,7 +262,8 @@ export class ActionBarManager {
     actionBar.addEventListener('focusout', (e) =>
       this.handleFocusOut(e as FocusEvent),
     );
-    // A-1: ←/→ で roving tabindex（ツールバー内移動）
+    // A-1: ←/→ で roving tabindex（デフォルトツールバーのみ。報告フォームの
+    // radiogroup 等は report-form.ts が独自にハンドルする）
     actionBar.addEventListener('keydown', (e) => this.handleToolbarKeydown(e));
 
     this.current = {
@@ -270,11 +278,34 @@ export class ActionBarManager {
           : messageEl,
     };
 
-    // A-1: 表示時に先頭の操作ボタンへフォーカス（マウス起点でも害はない —
-    // mouseenter 起点では activeElement は変わらないことが多いが、フォーカス
-    // 可能になることでキーボードユーザーが操作を継続できる）。
-    const firstBtn = actionBar.querySelector<HTMLButtonElement>('button');
-    firstBtn?.focus();
+    // 🟡(B4b) / A-1: first-focus は **キーボード起点のみ**。マウスホバー起点で
+    // フォーカスを奪うと、ライブチャット連続ホバーでページのフォーカス/
+    // スクロールが飛ぶ。
+    if (viaKeyboard) {
+      const firstBtn = actionBar.querySelector<HTMLButtonElement>('button');
+      firstBtn?.focus();
+    }
+  }
+
+  /** 実 DOM サイズを測ってビューポート内に配置し直す（A-6 可変サイズ）。 */
+  private repositionFor(actionBar: HTMLElement, messageEl: HTMLElement): void {
+    const msgRect = messageEl.getBoundingClientRect();
+    const barRect = actionBar.getBoundingClientRect();
+    const { left, top } = computeActionBarPosition(
+      msgRect,
+      window.innerWidth,
+      window.innerHeight,
+      barRect.width || BAR_WIDTH_EST,
+      barRect.height || BAR_HEIGHT_EST,
+    );
+    actionBar.style.left = `${left}px`;
+    actionBar.style.top = `${top}px`;
+    // 縦がビューポートを超える場合は内部スクロールを許容（上寄せ + max-height）
+    if (barRect.height > window.innerHeight - 16) {
+      actionBar.style.top = '8px';
+      actionBar.style.maxHeight = `${window.innerHeight - 16}px`;
+      actionBar.style.overflowY = 'auto';
+    }
   }
 
   /**
@@ -283,26 +314,39 @@ export class ActionBarManager {
    */
   private handleFocusOut(e: FocusEvent): void {
     if (!this.current) return;
-    const next = e.relatedTarget;
     const bar = this.current.actionBar;
     const msg = this.current.target.messageEl;
-    if (
-      next instanceof Node &&
-      ((bar && bar.contains(next)) || (msg && msg.contains(next)))
-    ) {
-      return; // バー↔コメント間の移動はフォーカス維持
+    const inside = (n: EventTarget | null) =>
+      n instanceof Node &&
+      ((bar && bar.contains(n)) || (msg && msg.contains(n)));
+
+    if (inside(e.relatedTarget)) return; // バー↔コメント間の移動は維持
+
+    // 🟡(B4b): relatedTarget が null（SR 仮想カーソル / 一部ブラウザ）の場合は
+    // 次フレームで document.activeElement を再判定してから誤閉じを防ぐ。
+    if (e.relatedTarget === null) {
+      requestAnimationFrame(() => {
+        if (!this.current) return;
+        if (inside(document.activeElement)) return;
+        this.scheduleHide();
+      });
+      return;
     }
     // 次フレームに遅延（focusin → focusout の一瞬の谷でちらつかせない）
     this.scheduleHide();
   }
 
-  /** ツールバー内 roving tabindex（←/→/Home/End）。 */
+  /**
+   * デフォルトツールバーの roving tabindex（←/→/Home/End）。
+   * 報告フォーム表示中はバー直下が form コンテナになり直下 button が無いので
+   * 何もしない（radiogroup 等は report-form.ts が独自にハンドル）。
+   */
   private handleToolbarKeydown(e: KeyboardEvent): void {
     if (!this.current) return;
     const keys = ['ArrowRight', 'ArrowLeft', 'Home', 'End'];
     if (!keys.includes(e.key)) return;
     const btns = Array.from(
-      this.current.actionBar.querySelectorAll<HTMLButtonElement>('button'),
+      this.current.actionBar.querySelectorAll<HTMLButtonElement>(':scope > button'),
     );
     if (btns.length === 0) return;
     const activeEl = document.activeElement;
@@ -365,25 +409,16 @@ export class ActionBarManager {
     }
   }
 
-  private positionActionBar(actionBar: HTMLElement, messageEl: HTMLElement): void {
-    const rect = messageEl.getBoundingClientRect();
-    const { left, top } = computeActionBarPosition(
-      rect,
-      window.innerWidth,
-      window.innerHeight,
-    );
-    actionBar.style.left = `${left}px`;
-    actionBar.style.top = `${top}px`;
-  }
-
   private createActionBar(target: ActionBarTarget): HTMLElement {
     const bar = document.createElement('div');
     bar.className = 'fck-action-bar';
-    // a11y: ボタン群なので toolbar ロール + ラベル
+    // a11y: ボタン群なので toolbar ロール + ラベル。🟡(B4b): 用途明示のため
+    // プレビュー断片を aria-label に含める（流去後も操作対象が分かる）。
+    const previewSnippet = buildPreviewText(target.text).short;
     bar.setAttribute('role', 'toolbar');
     bar.setAttribute(
       'aria-label',
-      `${target.authorDisplayName || 'このユーザー'} へのアクション`,
+      `${target.authorDisplayName || 'このユーザー'} のコメント「${previewSnippet}」へのアクション`,
     );
 
     if (this.callbacks?.onStats) {
@@ -412,9 +447,7 @@ export class ActionBarManager {
       bar.appendChild(
         this.makeButton('fck-action-report', '⚠️', '誤判定を報告', (e) => {
           e.stopPropagation();
-          const t = target;
-          this.hideNow();
-          this.callbacks?.onReport?.(t);
+          this.enterReportMode(target);
         }),
       );
     }
@@ -452,6 +485,46 @@ export class ActionBarManager {
     btn.tabIndex = 0;
     btn.addEventListener('click', onClick);
     return btn;
+  }
+
+  /**
+   * ⚠️ 押下時: バー内容を誤判定報告フォームに差し替える（P3-UI-06）。
+   * バー自体は維持（hideNow しない）。プレビュー / radiogroup / 送信・キャンセル
+   * の 3 リングは report-form.ts が独自に a11y ハンドルする。
+   */
+  private enterReportMode(target: ActionBarTarget): void {
+    if (!this.current || !this.callbacks?.onReport) return;
+    const onReport = this.callbacks.onReport;
+    const reportKind =
+      this.callbacks.getReportKind?.(target) ?? 'false_negative';
+
+    const form = buildReportForm({
+      text: target.text,
+      reportKind,
+      onSubmit: (reportedLabel) => {
+        onReport(target, reportedLabel);
+        announce('報告を送信しました');
+        this.hideNow();
+      },
+      onCancel: () => this.hideNow(),
+    });
+
+    const bar = this.current.actionBar;
+    bar.textContent = '';
+    bar.removeAttribute('role'); // toolbar ではなくなる（form 内に role 群）
+    bar.setAttribute(
+      'aria-label',
+      reportKind === 'false_positive'
+        ? '誤フィルタの報告フォーム'
+        : '見逃しの報告フォーム',
+    );
+    bar.appendChild(form.element);
+    // A-6: フォームは縦長になりがち。再計測して配置し直す。
+    if (this.current.target.messageEl) {
+      this.repositionFor(bar, this.current.target.messageEl);
+    }
+    // ⚠️ は明示操作なのでマウス/キーボード問わず先頭へフォーカス
+    form.focusFirst();
   }
 
   /** テスト用: 現在表示中のターゲットを返す（なければ null）。 */
