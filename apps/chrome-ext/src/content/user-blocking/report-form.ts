@@ -114,13 +114,11 @@ export function buildReportForm(opts: BuildReportFormOptions): ReportFormHandle 
   ensureStyles();
   const root = document.createElement('div');
   root.className = 'fck-report-form';
-  root.setAttribute('role', 'group');
-  root.setAttribute(
-    'aria-label',
-    opts.reportKind === 'false_positive'
-      ? '誤ってフィルタされたコメントの報告'
-      : 'フィルタすべきだったコメントの報告',
-  );
+  // B5 B-2: 外側二重 group 解消。フォーム全体の文脈（FP/FN）は呼び出し側
+  // （menu-manager がメニューコンテナに付与する aria-label）が担う。ここで
+  // root に role="group" を被せると radiogroup と二重グルーピングになり
+  // SR でグループ名/件数が読み上げにくくなる（WCAG 1.3.1）。root は
+  // 無 role の単なるレイアウトコンテナにする。
 
   // ── リング1: プレビュー ───────────────────────────────
   const { short, truncated } = buildPreviewText(opts.text);
@@ -164,6 +162,8 @@ export function buildReportForm(opts: BuildReportFormOptions): ReportFormHandle 
   radiogroup.className = 'fck-report-radiogroup';
   radiogroup.setAttribute('role', 'radiogroup');
   radiogroup.setAttribute('aria-label', '誤判定の種別を選択');
+  // B5 B-2: 種別選択は送信に必須。SR に必須性を伝える（WCAG 3.3.1 / 4.1.2）。
+  radiogroup.setAttribute('aria-required', 'true');
   let selected: number | null = null;
   const radios: HTMLButtonElement[] = [];
 
@@ -174,6 +174,9 @@ export function buildReportForm(opts: BuildReportFormOptions): ReportFormHandle 
   };
   const select = (idx: number) => {
     selected = idx;
+    // B5 B-2: 選択が起きて初めて全件 aria-checked を付与する。未選択のうちは
+    // どの radio にも aria-checked を付けない（全件 false だと「選択済みだが
+    // 全部 off」と誤認され、必須未選択であることが SR に伝わらない）。
     radios.forEach((r, i) => {
       r.setAttribute('aria-checked', i === idx ? 'true' : 'false');
     });
@@ -185,7 +188,8 @@ export function buildReportForm(opts: BuildReportFormOptions): ReportFormHandle 
     radio.type = 'button';
     radio.className = 'fck-report-radio';
     radio.setAttribute('role', 'radio');
-    radio.setAttribute('aria-checked', 'false');
+    // B5 B-2: 初期は aria-checked を付与しない（未選択 = 必須未充足を SR に
+    // 正しく伝える）。select() が初回選択時に全件へ true/false を付与する。
     radio.textContent = opt.label;
     radio.tabIndex = i === 0 ? 0 : -1; // 初期は先頭のみ tabstop（未選択）
     radio.addEventListener('click', () => select(i));
