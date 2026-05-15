@@ -8,6 +8,27 @@ import type { MisreportEntry } from '@fresh-chat-keeper/shared';
 export type FilterMode = 'strict' | 'standard' | 'lenient';
 export type DisplayMode = 'placeholder' | 'hidden';
 
+/** Phase 3 マルチラベル新カテゴリの強度（spam は強度なし） */
+export type CategoryStrength = 'loose' | 'standard' | 'strict';
+
+/**
+ * Phase 3（v0.4.0 / P3-UI-04）で追加された新カテゴリ設定。
+ *
+ * spoiler は従来どおり「基本」タブの {@link Settings.filterMode} +
+ * {@link Settings.enabled} で制御し、ここには **含めない**（既存ユーザーの
+ * 設定を移行不要にするため。混乱を避けるべく「カテゴリ」タブには
+ * spoiler は基本タブで設定する旨を明記する）。
+ *
+ * 設計方針（phase-3-multilabel.md リスク6 / L1120）: 新カテゴリは
+ * **すべてデフォルト OFF**。既存ユーザーの体験を変えない。
+ */
+export interface CategorySettings {
+  harassment: { enabled: boolean; strength: CategoryStrength };
+  spam: { enabled: boolean };
+  offTopic: { enabled: boolean; strength: CategoryStrength };
+  backseat: { enabled: boolean; strength: CategoryStrength };
+}
+
 export interface CustomNGWord {
   /** 安定した識別子（UUID） */
   id: string;
@@ -50,6 +71,12 @@ export interface Settings {
   customNgWords: CustomNGWord[];
   /** 有効化されているジャンルテンプレートのIDリスト */
   selectedGenreTemplates: string[];
+  /**
+   * Phase 3 マルチラベル新カテゴリ設定（P3-UI-04）。
+   * 既存ユーザーの保存値には存在しないため optional。読み出し時は
+   * {@link DEFAULT_SETTINGS}.categories（全 OFF）とマージされる。
+   */
+  categories?: CategorySettings;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -64,6 +91,13 @@ export const DEFAULT_SETTINGS: Settings = {
   collectionApiUrl: 'https://fresh-chat-keeper-api.playnicelab.workers.dev',
   customNgWords: [],
   selectedGenreTemplates: [],
+  // 新カテゴリはすべてデフォルト OFF（既存挙動を変えない / リスク6 対策）
+  categories: {
+    harassment: { enabled: false, strength: 'standard' },
+    spam: { enabled: false },
+    offTopic: { enabled: false, strength: 'standard' },
+    backseat: { enabled: false, strength: 'standard' },
+  },
 };
 
 /** メイン設定のストレージキー。書き込みはポップアップのみ行う。 */

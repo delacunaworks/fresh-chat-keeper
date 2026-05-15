@@ -187,26 +187,24 @@ let liveStartedAtMs: number | null = null;
 const historyStore = new HistoryStore();
 
 /**
- * Stage 1.5 に渡す FilterSettings（v3）。
+ * Stage 1.5 に渡す FilterSettings（v3）を現在の chrome-ext 設定から構築する。
  *
- * chrome-ext 独自 Settings 型にはまだカテゴリ別 ON/OFF UI が無い（B4 / P3-UI-04）。
- * B3 では Stage 1.5 spam 検出を機能させて手動テスト可能にするため、
- * spam を enabled で固定する。Stage 1.5 spam の閾値は保守的
- * （10 秒 3 連投 / 完全一致コピペ / 10 文字以上連打）で誤検出 < 5% 設計なので、
- * UI が無い B3 でも既定 ON を許容する。
- * B4 で P3-UI-04 がカテゴリ別トグル UI を実装したら、設計書「新カテゴリは
- * デフォルト OFF」の方針に従って既定値を見直すこと（B4 引き継ぎ）。
+ * P3-UI-04（B4a）でカテゴリタブが実装され、spam の ON/OFF はユーザーが
+ * 「カテゴリ」タブで制御する。設計方針「新カテゴリは既定 OFF」に従い、
+ * `currentSettings.categories.spam.enabled`（未設定時 false）を反映する。
+ * B3 のテスト用ハードコード ON は廃止。
  */
-const STAGE1_5_SETTINGS: FilterSettings = (() => {
+function buildStage1_5Settings(): FilterSettings {
   const base = migrateSettings({});
+  const spamEnabled = currentSettings?.categories?.spam?.enabled === true;
   return {
     ...base,
     categories: {
       ...base.categories,
-      spam: { enabled: true },
+      spam: { enabled: spamEnabled },
     },
   };
-})();
+}
 
 /**
  * emit スキップの warn を 1 度だけ出すためのフラグ。
@@ -251,7 +249,7 @@ export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
 
   // ユーザーブロックリストをメモリへ読み込み（以降 processMessage が同期判定）。
   // アクションバーの 🚫 ハンドラを注入し、グローバル ESC を有効化する。
-  void initUserBlocks();
+  void initUserBlocks(() => currentSettings?.displayMode ?? 'placeholder');
   actionBarManager.init({
     onBlock: async (channelId, displayName) => {
       const displayMode = currentSettings?.displayMode ?? 'placeholder';
@@ -1002,7 +1000,7 @@ function runStage1_5Filter(el: Element, text: string): boolean {
       // バーストでも誤検出しにくい。動画内オフセット連動は Phase 4 で対応。
       timestamp: Date.now(),
     },
-    { settings: STAGE1_5_SETTINGS },
+    { settings: buildStage1_5Settings() },
     historyStore,
   );
 

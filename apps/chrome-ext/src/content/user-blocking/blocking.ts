@@ -18,21 +18,18 @@ import {
 } from '../chat-dom.js';
 import { getAuthorChannelIdFromElement } from '../author-extract.js';
 import type { DisplayMode } from '../../shared/settings.js';
+import {
+  USER_BLOCKS_KEY,
+  emptyUserBlockStore as emptyStore,
+  normalizeUserBlockStore as normalizeStore,
+  type UserBlockStore,
+} from '../../shared/user-blocks.js';
 
-/** 1 ユーザー分のブロックメタ情報 */
-export interface UserBlockMetadata {
-  displayNameAtBlock: string;
-  blockedAt: number;
-  reason?: string;
-}
-
-/** `fck_user_blocks` の保存構造（shared FilterSettings.userBlocks と同型） */
-export interface UserBlockStore {
-  channelIds: string[];
-  metadata: Record<string, UserBlockMetadata>;
-}
-
-export const USER_BLOCKS_KEY = 'fck_user_blocks';
+export {
+  USER_BLOCKS_KEY,
+  type UserBlockMetadata,
+  type UserBlockStore,
+} from '../../shared/user-blocks.js';
 
 /** ブロック対象メッセージのフィルタ理由（誤判定報告メタ等で使用） */
 const BLOCK_REASON = 'ユーザーブロック';
@@ -45,60 +42,59 @@ const MESSAGE_SELECTOR = '#message';
 
 /** 高速同期判定用のメモリキャッシュ（processMessage のホットパスから参照）。 */
 let blockedSet = new Set<string>();
-let storeCache: UserBlockStore = { channelIds: [], metadata: {} };
+let storeCache: UserBlockStore = emptyStore();
 let loaded = false;
 
-function emptyStore(): UserBlockStore {
-  return { channelIds: [], metadata: {} };
-}
-
-/** 不正な保存値に強い正規化（型不一致は空構造へ fail-safe）。 */
-function normalizeStore(raw: unknown): UserBlockStore {
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    return emptyStore();
-  }
-  const r = raw as Record<string, unknown>;
-  const channelIds = Array.isArray(r.channelIds)
-    ? r.channelIds.filter((v): v is string => typeof v === 'string')
-    : [];
-  const metadata: Record<string, UserBlockMetadata> = {};
-  if (typeof r.metadata === 'object' && r.metadata !== null && !Array.isArray(r.metadata)) {
-    for (const [id, m] of Object.entries(r.metadata as Record<string, unknown>)) {
-      if (typeof m !== 'object' || m === null) continue;
-      const mm = m as Record<string, unknown>;
-      if (
-        typeof mm.displayNameAtBlock === 'string' &&
-        typeof mm.blockedAt === 'number' &&
-        !Number.isNaN(mm.blockedAt)
-      ) {
-        metadata[id] = {
-          displayNameAtBlock: mm.displayNameAtBlock,
-          blockedAt: mm.blockedAt,
-          ...(typeof mm.reason === 'string' ? { reason: mm.reason } : {}),
-        };
-      }
-    }
-  }
-  return { channelIds, metadata };
-}
+/** 外部変更時の遡及非表示に使う displayMode を返すプロバイダ（既定 placeholder） */
+let displayModeProvider: () => DisplayMode = () => 'placeholder';
+let storageListenerAttached = false;
 
 /**
  * 起動時に一度だけ呼ぶ。`fck_user_blocks` をメモリへ読み込む。
  * 以降 {@link isUserBlocked} が同期判定可能になる。
+ *
+ * P3-UI-04: popup の UserBlocklist タブが `fck_user_blocks` を直接書き換える
+ * （別コンテキスト）。content 側はその変更を購読し、解除されたユーザーの
+ * コメントを復元・新規ブロックを遡及非表示する（手動テスト「解除でコメント復元」）。
+ *
+ * @param getDisplayMode 外部変更時の遡及非表示に使う表示方式プロバイダ
  */
-export async function initUserBlocks(): Promise<void> {
-  if (loaded) return;
-  try {
-    const result = await chrome.storage.local.get(USER_BLOCKS_KEY);
-    storeCache = normalizeStore(result[USER_BLOCKS_KEY]);
-  } catch (err) {
-    // chrome.storage 失敗時はブロックなしで継続（フィルタ機能自体は生かす）。
-    // サイレント失敗を避けるためログ。
-    console.error('[FreshChatKeeper] ユーザーブロックの読み込みに失敗:', err);
-    storeCache = emptyStore();
+export async function initUserBlocks(
+  getDisplayMode?: () => DisplayMode,
+): Promise<void> {
+  if (getDisplayMode) displayModeProvider = getDisplayMode;
+  if (!loaded) {
+    try {
+      const result = await chrome.storage.local.get(USER_BLOCKS_KEY);
+      storeCache = normalizeStore(result[USER_BLOCKS_KEY]);
+    } catch (err) {
+      // chrome.storage 失敗時はブロックなしで継続（フィルタ機能自体は生かす）。
+      // サイレント失敗を避けるためログ。
+      console.error('[FreshChatKeeper] ユーザーブロックの読み込みに失敗:', err);
+      storeCache = emptyStore();
+    }
+    blockedSet = new Set(storeCache.channelIds);
+    loaded = true;
   }
-  blockedSet = new Set(storeCache.channelIds);
-  loaded = true;
+
+  if (!storageListenerAttached) {
+    storageListenerAttached = true;
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== 'local' || !changes[USER_BLOCKS_KEY]) return;
+      const next = normalizeStore(changes[USER_BLOCKS_KEY].newValue);
+      const nextSet = new Set(next.channelIds);
+      const prevSet = blockedSet;
+      // 自分（content）の blockUser/unblockUser 由来の変更も発火するが、
+      // diff ベースなので冪等（既に hide/restore 済みなら no-op）。
+      const added = [...nextSet].filter((id) => !prevSet.has(id));
+      const removed = [...prevSet].filter((id) => !nextSet.has(id));
+      storeCache = next;
+      blockedSet = nextSet;
+      const mode = displayModeProvider();
+      for (const id of added) hideExistingMessagesFromUser(id, mode);
+      for (const id of removed) restoreMessagesFromUser(id);
+    });
+  }
 }
 
 /** 同期ブロック判定（initUserBlocks 後に有効）。空 channelId は常に false。 */

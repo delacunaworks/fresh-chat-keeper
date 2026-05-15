@@ -28,6 +28,9 @@ import {
 } from '../content/collection-client.js';
 import { CollectionConsentModal } from './CollectionConsentModal.js';
 import { CollectionRevokeConfirmModal } from './CollectionRevokeConfirmModal.js';
+import { CategoryFilters } from './tabs/CategoryFilters.js';
+import { UserBlocklist } from './tabs/UserBlocklist.js';
+import type { CategorySettings } from '../shared/settings.js';
 import type { KBGame } from '@fresh-chat-keeper/knowledge-base';
 import { getAllGenreTemplates } from '@fresh-chat-keeper/knowledge-base';
 import aceAttorney1 from '@kb-data/ace-attorney-1.json';
@@ -103,6 +106,70 @@ function SegmentedControl({
           {opt.label}
         </button>
       ))}
+    </div>
+  );
+}
+
+// ─── タブバー（a11y: role=tablist + roving tabindex + 矢印キー）──────────
+
+type TabId = 'basic' | 'category' | 'blocklist';
+
+const TABS: { id: TabId; label: string }[] = [
+  { id: 'basic', label: '基本' },
+  { id: 'category', label: 'カテゴリ' },
+  { id: 'blocklist', label: 'ブロック' },
+];
+
+function TabBar({
+  active,
+  onChange,
+}: {
+  active: TabId;
+  onChange: (id: TabId) => void;
+}) {
+  const onKeyDown = (e: React.KeyboardEvent, idx: number) => {
+    let nextIdx: number | null = null;
+    if (e.key === 'ArrowRight') nextIdx = (idx + 1) % TABS.length;
+    else if (e.key === 'ArrowLeft') nextIdx = (idx - 1 + TABS.length) % TABS.length;
+    else if (e.key === 'Home') nextIdx = 0;
+    else if (e.key === 'End') nextIdx = TABS.length - 1;
+    if (nextIdx === null) return;
+    e.preventDefault();
+    const next = TABS[nextIdx];
+    onChange(next.id);
+    // roving: 移動先タブへフォーカス
+    document.getElementById(`fck-tab-${next.id}`)?.focus();
+  };
+
+  return (
+    <div
+      role="tablist"
+      aria-label="設定カテゴリ"
+      className="flex border-b border-gray-200 bg-gray-50"
+    >
+      {TABS.map((t, i) => {
+        const selected = t.id === active;
+        return (
+          <button
+            key={t.id}
+            id={`fck-tab-${t.id}`}
+            role="tab"
+            type="button"
+            aria-selected={selected}
+            aria-controls={`fck-tabpanel-${t.id}`}
+            tabIndex={selected ? 0 : -1}
+            onClick={() => onChange(t.id)}
+            onKeyDown={(e) => onKeyDown(e, i)}
+            className={`flex-1 py-2 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500 focus:outline-none ${
+              selected
+                ? 'text-indigo-600 border-b-2 border-indigo-600 bg-white'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            {t.label}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -564,6 +631,16 @@ export default function App() {
     progressModel: activeGame.progress_type,
   };
 
+  const [activeTab, setActiveTab] = useState<TabId>('basic');
+
+  // 旧ユーザーの保存値に categories が無い場合は全 OFF デフォルトで補完
+  const categories: CategorySettings = settings.categories ?? {
+    harassment: { enabled: false, strength: 'standard' },
+    spam: { enabled: false },
+    offTopic: { enabled: false, strength: 'standard' },
+    backseat: { enabled: false, strength: 'standard' },
+  };
+
   if (!loaded) {
     return <div className="p-4 text-sm text-gray-400">読み込み中...</div>;
   }
@@ -591,6 +668,29 @@ export default function App() {
         </div>
       </div>
 
+      <TabBar active={activeTab} onChange={setActiveTab} />
+
+      {activeTab === 'category' && (
+        <div id="fck-tabpanel-category" role="tabpanel" aria-labelledby="fck-tab-category">
+          <CategoryFilters
+            categories={categories}
+            onChange={(next) => update({ categories: next })}
+          />
+        </div>
+      )}
+
+      {activeTab === 'blocklist' && (
+        <div id="fck-tabpanel-blocklist" role="tabpanel" aria-labelledby="fck-tab-blocklist">
+          <UserBlocklist />
+        </div>
+      )}
+
+      <div
+        id="fck-tabpanel-basic"
+        role="tabpanel"
+        aria-labelledby="fck-tab-basic"
+        hidden={activeTab !== 'basic'}
+      >
       {/* 設定パネル（無効時は薄く表示） */}
       <div className={settings.enabled ? '' : 'opacity-40 pointer-events-none'}>
         {/* ゲーム選択 */}
@@ -696,6 +796,7 @@ export default function App() {
         - 能動的に探した人だけが ON にする UX を実現
       */}
       <CollectionSection apiUrl={settings.collectionApiUrl} />
+      </div>
 
     </div>
   );

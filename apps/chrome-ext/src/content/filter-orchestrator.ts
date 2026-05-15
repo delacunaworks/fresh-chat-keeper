@@ -167,6 +167,17 @@ function buildJudgmentContext(settings: Settings, videoTitle: string | undefined
         enabled: true,
         strength: legacyFilterModeToStrength(settings.filterMode),
       },
+      // P3-UI-04: 新カテゴリは chrome-ext Settings.categories（カテゴリタブ）
+      // から map。未設定（旧ユーザー）は全 OFF。proxy 側 primaryToVerdict が
+      // これを見て block/allow を決める。
+      ...(settings.categories
+        ? {
+            harassment: settings.categories.harassment,
+            spam: settings.categories.spam,
+            offTopic: settings.categories.offTopic,
+            backseat: settings.categories.backseat,
+          }
+        : {}),
     },
     customBlockWords: settings.customNgWords
       .filter((w) => w.enabled)
