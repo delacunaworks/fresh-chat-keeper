@@ -16,6 +16,8 @@ import { describe, it, expect } from 'vitest';
 import {
   parseMultiLabelResponse,
   parseMultiLabelResponseText,
+  parseMultiLabelResponseDetailed,
+  classifyParse,
   validateJudgmentEntry,
   __test__,
 } from '../src/judgment-parser.js';
@@ -400,5 +402,59 @@ describe('内部ヘルパー (__test__)', () => {
       expect(validateConfidence(null)).toBe(0.5);
       expect(validateConfidence(undefined)).toBe(0.5);
     });
+  });
+});
+
+describe('classifyParse (B4a degraded 判定)', () => {
+  it('正常な JSON 配列 → ok', () => {
+    expect(classifyParse('[{"messageId":"m1","labels":["safe"]}]').status).toBe('ok');
+  });
+
+  it('空配列 [] も ok（LLM が空回答しただけ、壊れていない）', () => {
+    expect(classifyParse('[]').status).toBe('ok');
+  });
+
+  it('配列が見つからない（空文字）→ no_array', () => {
+    expect(classifyParse('').status).toBe('no_array');
+  });
+
+  it('説明文のみで配列なし → no_array', () => {
+    expect(classifyParse('判定できませんでした').status).toBe('no_array');
+  });
+
+  it('配列断片はあるが JSON 不正 → json_error（error を保持）', () => {
+    const r = classifyParse('[{bad json,,}]');
+    expect(r.status).toBe('json_error');
+    expect(r.error).toBeInstanceOf(Error);
+  });
+});
+
+describe('parseMultiLabelResponseDetailed (degraded 伝播)', () => {
+  it('正常応答 → degraded:false、judgments は通常パース', () => {
+    const r = parseMultiLabelResponseDetailed(
+      '[{"messageId":"m1","labels":["spoiler"],"primary":"spoiler","confidence":0.9}]',
+      ['m1'],
+    );
+    expect(r.degraded).toBe(false);
+    expect(r.judgments[0]?.primary).toBe('spoiler');
+  });
+
+  it('パース失敗 → degraded:true、judgments は全件 safe fallback', () => {
+    const r = parseMultiLabelResponseDetailed('壊れた応答', ['m1', 'm2']);
+    expect(r.degraded).toBe(true);
+    expect(r.judgments).toHaveLength(2);
+    expect(r.judgments.every((j) => j.primary === 'safe')).toBe(true);
+  });
+
+  it('JSON 例外 → degraded:true', () => {
+    const r = parseMultiLabelResponseDetailed('[{bad,,}]', ['m1']);
+    expect(r.degraded).toBe(true);
+    expect(r.judgments[0]?.primary).toBe('safe');
+  });
+
+  it('空配列 [] は degraded:false（LLM 空回答、全件 safeFallback だが再判定不要）', () => {
+    const r = parseMultiLabelResponseDetailed('[]', ['m1']);
+    expect(r.degraded).toBe(false);
+    expect(r.judgments[0]?.primary).toBe('safe');
   });
 });

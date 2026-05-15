@@ -37,7 +37,10 @@ import {
   type JudgmentContext,
 } from '@fresh-chat-keeper/judgment-engine';
 import { getAllGenreTemplates } from '@fresh-chat-keeper/knowledge-base';
-import { parseMultiLabelResponse, type ParsedJudgment } from './judgment-parser.js';
+import {
+  parseMultiLabelResponseDetailed,
+  classifyParse,
+} from './judgment-parser.js';
 
 export interface Env {
   ANTHROPIC_API_KEY: string;
@@ -195,9 +198,9 @@ async function handleJudge(request: Request, env: Env): Promise<Response> {
   }
 
   const normalized = normalizeRequest(bodyObj);
-  const results = await judgeBatch(normalized, env.ANTHROPIC_API_KEY);
+  const { results, degraded } = await judgeBatch(normalized, env.ANTHROPIC_API_KEY);
 
-  const response: JudgeResponse = { results };
+  const response: JudgeResponse = { results, ...(degraded ? { degraded: true } : {}) };
   return jsonOk(response);
 }
 
@@ -353,10 +356,33 @@ function buildGenreTemplateField(selectedIds: string[]): string | undefined {
 
 // ─── バッチ LLM 判定 ───────────────────────────────────────────────────────────
 
+/** Anthropic を 1 回呼び、本文テキストを返す。失敗時は null（呼び出し側で fallback）。 */
+async function callAnthropicOnce(
+  body: string,
+  apiKey: string,
+): Promise<string | null> {
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body,
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error(`[FreshChatKeeper] Anthropic API error ${response.status}: ${errorText}`);
+    return null;
+  }
+  const data = (await response.json()) as { content: Array<{ type: string; text: string }> };
+  return data.content[0]?.text ?? '';
+}
+
 async function judgeBatch(
   req: NormalizedRequest,
   apiKey: string,
-): Promise<FilterResult[]> {
+): Promise<{ results: FilterResult[]; degraded: boolean }> {
   const modelCfg = getEffectiveModel(req.tier);
 
   // judgment-engine の Message 型に合わせて変換（authorChannelId/authorDisplayName/timestamp は
@@ -379,47 +405,54 @@ async function judgeBatch(
 
   // ネットワーク失敗・LLM エラー時の全件 uncertain fallback。
   // Phase 3 マルチラベル化後も verdict 計算経路を維持（chrome-ext v0.3.5 互換）。
-  const fallbackResults = (): FilterResult[] =>
-    req.messages.map((m) => ({
+  const fallbackResults = (): { results: FilterResult[]; degraded: boolean } => ({
+    results: req.messages.map((m) => ({
       messageId: m.id,
       verdict: uncertainVerdict(req.legacyFilterMode),
       stage: 2,
-    }));
+    })),
+    // ネットワーク/HTTP 失敗は「LLM 応答そのものが無い」= degraded 扱い。
+    // chrome-ext は safe をキャッシュせず再判定の余地を残す。
+    degraded: true,
+  });
+
+  const requestBody = JSON.stringify({
+    model: modelCfg.model,
+    max_tokens: maxTokens,
+    temperature: modelCfg.temperature,
+    system: systemBlocks,
+    messages: [{ role: 'user', content: userPrompt }],
+  });
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: modelCfg.model,
-        max_tokens: maxTokens,
-        temperature: modelCfg.temperature,
-        system: systemBlocks,
-        messages: [{ role: 'user', content: userPrompt }],
-      }),
-    });
+    let text = await callAnthropicOnce(requestBody, apiKey);
+    if (text === null) return fallbackResults();
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(`[FreshChatKeeper] Anthropic API error ${response.status}: ${errorText}`);
-      return fallbackResults();
+    const messageIds = req.messages.map((m) => m.id);
+    let detail = parseMultiLabelResponseDetailed(text, messageIds);
+
+    // パース失敗（配列抽出不可 / JSON.parse 例外）は握り潰さず warn → 1 回だけ
+    // 同一リクエストを再送リトライ（CLAUDE.md 設計原則 3 例外運用）。
+    if (detail.degraded) {
+      const cls = classifyParse(text);
+      console.warn(
+        `[FreshChatKeeper] Stage 2 parse failed (${cls.status})${
+          cls.error ? `: ${cls.error instanceof Error ? cls.error.message : String(cls.error)}` : ''
+        }; retrying once`,
+      );
+      const retryText = await callAnthropicOnce(requestBody, apiKey);
+      if (retryText !== null) {
+        text = retryText;
+        detail = parseMultiLabelResponseDetailed(text, messageIds);
+      }
+      if (detail.degraded) {
+        console.warn(
+          '[FreshChatKeeper] Stage 2 parse still failing after retry; returning all-safe (degraded), not caching',
+        );
+      }
     }
 
-    const data = (await response.json()) as { content: Array<{ type: string; text: string }> };
-    const text = data.content[0]?.text ?? '';
-
-    // Phase 3: judgment-parser.ts に集約したマルチラベルパーサーで処理する。
-    // パーサー側で「JSON 抽出 → バリデーション → safe フォールバック」をすべて担当。
-    const parsed: ParsedJudgment[] = parseMultiLabelResponse(
-      text,
-      req.messages.map((m) => m.id),
-    );
-
-    return parsed.map((p) => {
+    const results: FilterResult[] = detail.judgments.map((p) => {
       const verdict = primaryToVerdict(p.primary, req.context.settings, req.legacyFilterMode);
       return {
         messageId: p.messageId,
@@ -448,6 +481,7 @@ async function judgeBatch(
         ...(p.reasonJa ? { reason: p.reasonJa } : {}),
       };
     });
+    return { results, degraded: detail.degraded };
   } catch (err) {
     console.error('[FreshChatKeeper] judgeBatch error:', err);
     return fallbackResults();

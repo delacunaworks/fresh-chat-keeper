@@ -60,6 +60,12 @@ export async function sendStage2Batch(
     return false;
   }
 
+  // B4a: proxy が degraded（Stage 2 パース失敗でリトライしてもなお全件 safe）
+  // を返した場合、その safe を永続キャッシュしない。次回バッチ/リロードで
+  // 再判定する余地を残す（phase-3-multilabel.md §追補 2）。その場の verdict は
+  // onResult 経由で適用される（safe = 通す）。
+  const degraded = response.degraded === true;
+
   for (const result of response.results) {
     const idx = parseInt(result.messageId, 10);
     const candidate = batch[idx];
@@ -79,8 +85,11 @@ export async function sendStage2Batch(
     };
 
     // verdict 計算は archive.ts 側で applyStage2Verdict が verdictFromCache を呼ぶ。
-    // ここではキャッシュ保存と onResult 通知のみ行う。
-    await saveJudgeCacheEntry(candidate.cacheKey, entry);
+    // degraded のときは保存をスキップ（再判定余地を残す）。onResult はその場の
+    // verdict 適用のため degraded でも必ず呼ぶ。
+    if (!degraded) {
+      await saveJudgeCacheEntry(candidate.cacheKey, entry);
+    }
     onResult(candidate, entry);
   }
 

@@ -30,6 +30,13 @@ export interface JudgeRequest {
  */
 export interface JudgeResponse {
   results: FilterResult[];
+  /**
+   * Stage 2 LLM レスポンスのパースに失敗し（リトライしてもなお）、全件 safe
+   * フォールバックで返したことを示す（Phase 3 B4a）。後方互換 optional。
+   * クライアントはこのバッチの safe 結果を**永続キャッシュしない**こと
+   * （再判定の余地を残す。phase-3-multilabel.md §追補 2）。
+   */
+  degraded?: boolean;
 }
 
 /**
