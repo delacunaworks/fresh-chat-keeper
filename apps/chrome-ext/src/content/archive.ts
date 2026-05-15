@@ -34,6 +34,7 @@ import {
   getAuthorChannelIdFromElement,
 } from './author-extract.js';
 import { actionBarManager } from './user-blocking/hover-manager.js';
+import type { ReportedLabel, ReportKind } from './user-blocking/report-form.js';
 import { setupChatRemovalObserver } from './user-blocking/observer.js';
 import {
   initUserBlocks,
@@ -260,6 +261,12 @@ export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
         // B4a hardening C: 永続化失敗を可視化（ロールバック済みなので未ブロック）
         showBlockErrorToast('ブロックを保存できませんでした。もう一度お試しください');
       }
+    },
+    // P3-UI-06: 報告種別はコメントの表示状態から自動判定
+    // （フィルタ済み→FP / 表示中→FN）。
+    getReportKind: (target) => reportKindForElement(target.messageEl),
+    onReport: (target, reportedLabel) => {
+      handleReport(target.messageEl, target.text, reportedLabel);
     },
   });
 
@@ -512,7 +519,7 @@ function processMessage(el: Element): void {
   // hover アクションバーは renderer 行単位でホバー検知する。ブロック済み投稿者の
   // 新規コメントもここで遡及非表示と同じテキスト書き換えで隠す（セッション継続）。
   const authorChannelId = getAuthorChannelIdFromElement(el);
-  attachActionBar(el, authorChannelId);
+  attachActionBar(el, authorChannelId, text);
   if (authorChannelId && isUserBlocked(authorChannelId)) {
     applyFilter(el, text, 'ユーザーブロック', undefined, 'user_block');
     return;
@@ -845,82 +852,17 @@ function applyFilter(
 ): void {
   if (!currentSettings) return;
   const settings = currentSettings;
+  void spoilerCategory; // P3-UI-06: 旧 FP-via-placeholder 経路廃止につき未使用
 
-  // misreport 発火時の SpoilerJudgmentLog 構築用 context を applyFilter 時点で
-  // 確定させる。後で DOM から再取得すると el が剥がれて videoId 等が取れない
-  // ケースがあるため、この時点で snapshot を取る。
-  const videoId = getVideoIdFromUrl();
-  const channelId = getChannelIdFromDom();
-  const targetAuthorChannelId = getAuthorChannelIdFromElement(el);
-  const precedingMessages =
-    currentPageMode === 'archive_replay' ? collectPrecedingMessages(el) : [];
-
-  const onMisreport = (): void => {
-    const reportedAt = new Date().toISOString();
-    const entry: MisreportEntry = {
-      text,
-      spoilerCategory: spoilerCategory ?? null,
-      gameId: settings.gameId,
-      progress: settings.progressByGame[settings.gameId] ?? null,
-      filterMode: settings.filterMode,
-      timestamp: reportedAt,
-    };
-
-    // Phase 2.5: opt-in 中なら ingest にも並行送信し、生成された logId を
-    // MisreportEntry.syncedLogId に保存する。emitMisreportLog は opt-out なら
-    // null を返すため、entry.synced も自動で false 相当になる。
-    // 必須フィールド（videoId / channelId / authorChannelId）が欠けている場合は
-    // 諦めてローカル保存のみ（apps/api の 422 を避ける）。
-    if (videoId && channelId && targetAuthorChannelId) {
-      const logId = emitMisreportLog(
-        {
-          videoId,
-          channelId,
-          gameTitle:
-            settings.gameId === 'none' || settings.gameId === 'other'
-              ? null
-              : settings.gameId,
-          timeIntoStream:
-            currentPageMode === 'live' && liveStartedAtMs !== null
-              ? Math.floor((Date.now() - liveStartedAtMs) / 1000)
-              : null,
-          judgmentMode: currentPageMode,
-          targetBody: text,
-          targetAuthorChannelId,
-          targetTimestamp: new Date().toISOString(),
-          precedingMessages,
-          stageACategory: 'unknown',
-          labels: ['spoiler'],
-          primaryLabel: 'spoiler',
-          confidence: 1.0,
-          stage: 'stage2',
-          reasonJa: null,
-          labelSource: 'user_report',
-        },
-        {
-          reportedAt,
-          // 視聴者が「フィルタは間違いだった」と報告 = 正しいラベルは 'safe'
-          correctLabel: 'safe',
-          failureCategory: null,
-          freeTextReason: null,
-        },
-      );
-      if (logId !== null) {
-        entry.synced = true;
-        entry.syncedLogId = logId;
-      }
-    }
-
-    saveMisreport(entry);
-  };
-
+  // P3-UI-06: 誤判定報告はアクションバー ⚠️ に一本化。chat-dom.ts の
+  // プレースホルダー経由 FP ボタン（onMisreport）は廃止し、ここでは渡さない。
+  // saveMisreport の単一経路は handleReport（FP/FN とも）。
   filterMessageElement(
     el,
     settings.displayMode,
     matchedKeyword,
     matchedContext,
     () => { revealedTexts.add(text); },
-    onMisreport,
   );
   try {
     chrome.storage.local.get(FILTER_COUNT_KEY, (result) => {
@@ -948,6 +890,119 @@ function emitStage1SpoilerLog(el: Element, text: string): void {
   });
 }
 
+// ─── P3-UI-06: 誤判定報告（FP/FN 一本化、saveMisreport の単一経路）─────────
+
+/**
+ * コメントの表示状態から報告種別を自動判定する。
+ * 内部の #message が data-fck-filtered を持つ（= フィルタ済み）→ false_positive、
+ * 持たない（= 表示中）→ false_negative。
+ */
+function reportKindForElement(messageEl: HTMLElement | null): ReportKind {
+  if (!messageEl) return 'false_negative';
+  const msg = messageEl.querySelector(MSG_TEXT_SELECTOR);
+  return msg && msg.hasAttribute(ATTR_FILTERED)
+    ? 'false_positive'
+    : 'false_negative';
+}
+
+/**
+ * 誤判定報告の単一処理経路（FP/FN 共通、二重保存なし）。
+ *
+ * - `MisreportEntry` をローカル保存（reportKind / reportedLabel 込み）
+ * - opt-in 中なら `emitMisreportLog` で ingest にも並行送信（必須フィールド
+ *   欠落時はローカル保存のみ）
+ * - `correctLabel` / `failureCategory` は reportKind / reportedLabel から導出
+ *   （旧ハードコード `correctLabel:'safe'` / `failureCategory:null` を置換）
+ */
+function handleReport(
+  messageEl: HTMLElement | null,
+  text: string,
+  reportedLabel: ReportedLabel | undefined,
+): void {
+  if (!currentSettings) return;
+  const settings = currentSettings;
+  const reportedAt = new Date().toISOString();
+  const reportKind = reportKindForElement(messageEl);
+
+  const entry: MisreportEntry = {
+    text,
+    spoilerCategory: null, // 旧フィールド（primary 経路に置換済み）。報告では未使用
+    gameId: settings.gameId,
+    progress: settings.progressByGame[settings.gameId] ?? null,
+    filterMode: settings.filterMode,
+    timestamp: reportedAt,
+    reportKind,
+    ...(reportedLabel ? { reportedLabel } : {}),
+  };
+
+  // 導出: FP（誤ブロック）= 本来 safe。FN（見逃し）= 視聴者の申告ラベル。
+  const correctLabel: import('@fresh-chat-keeper/shared').CollectionLabel | 'unknown' =
+    reportKind === 'false_positive' ? 'safe' : (reportedLabel ?? 'unknown');
+  const failureCategory:
+    | import('@fresh-chat-keeper/shared').CollectionLabel
+    | 'unknown'
+    | null = reportKind === 'false_positive' ? null : (reportedLabel ?? null);
+
+  // emit 用 labels/primary: FP→safe、FN→申告ラベル（unknown/skip は中立 safe。
+  // 訂正の本体は userFeedback.correctLabel/failureCategory + reportKind 側）
+  const emitPrimary: import('@fresh-chat-keeper/shared').CollectionLabel =
+    reportKind === 'false_positive'
+      ? 'safe'
+      : reportedLabel && reportedLabel !== 'unknown'
+        ? reportedLabel
+        : 'safe';
+
+  const videoId = getVideoIdFromUrl();
+  const channelId = getChannelIdFromDom();
+  const targetAuthorChannelId = messageEl
+    ? getAuthorChannelIdFromElement(messageEl)
+    : '';
+  if (videoId && channelId && targetAuthorChannelId) {
+    const msgEl = messageEl?.querySelector(MSG_TEXT_SELECTOR) ?? null;
+    const logId = emitMisreportLog(
+      {
+        videoId,
+        channelId,
+        gameTitle:
+          settings.gameId === 'none' || settings.gameId === 'other'
+            ? null
+            : settings.gameId,
+        timeIntoStream:
+          currentPageMode === 'live' && liveStartedAtMs !== null
+            ? Math.floor((Date.now() - liveStartedAtMs) / 1000)
+            : null,
+        judgmentMode: currentPageMode,
+        targetBody: text,
+        targetAuthorChannelId,
+        targetTimestamp: new Date().toISOString(),
+        precedingMessages:
+          currentPageMode === 'archive_replay' && msgEl
+            ? collectPrecedingMessages(msgEl)
+            : [],
+        stageACategory: 'unknown',
+        labels: [emitPrimary],
+        primaryLabel: emitPrimary,
+        confidence: 1.0,
+        stage: 'stage2',
+        reasonJa: null,
+        labelSource: 'user_report',
+      },
+      {
+        reportedAt,
+        correctLabel,
+        failureCategory,
+        freeTextReason: null,
+      },
+    );
+    if (logId !== null) {
+      entry.synced = true;
+      entry.syncedLogId = logId;
+    }
+  }
+
+  saveMisreport(entry);
+}
+
 /** アクションバー紐付け済みマーカー（多重 addEventListener 防止） */
 const ATTR_AB_ATTACHED = 'data-fck-ab-attached';
 /** アクションバーの messageKey 用シーケンス（同一コメント再ホバー判定に使用） */
@@ -955,11 +1010,14 @@ let actionBarKeySeq = 0;
 
 /**
  * コメント要素にホバーアクションバーを紐付ける（renderer 行単位、1 回だけ）。
- * authorChannelId が空（DOM から識別子が取れない）の場合は紐付けない
- * （ブロックできないため）。
+ *
+ * P3-UI-06: 誤判定報告（FP/FN）は **全コメント対象**なので、authorChannelId が
+ * 空（DOM から識別子が取れない）でも紐付ける。その場合ブロックは成立しない
+ * （blockUser が空 channelId を no-op + 失敗トースト）が、⚠️ 報告は機能する。
+ *
+ * @param text コメント本文スナップショット（流去後もプレビューで使う）
  */
-function attachActionBar(el: Element, authorChannelId: string): void {
-  if (!authorChannelId) return;
+function attachActionBar(el: Element, authorChannelId: string, text: string): void {
   const renderer =
     el.closest('yt-live-chat-text-message-renderer') ??
     el.closest('yt-live-chat-paid-message-renderer');
@@ -972,6 +1030,7 @@ function attachActionBar(el: Element, authorChannelId: string): void {
     // 2026-05 仕様では識別子＝表示ハンドルなので displayName も同値で十分
     authorDisplayName: authorChannelId,
     messageKey: `ab-${actionBarKeySeq++}`,
+    text,
   });
 }
 
