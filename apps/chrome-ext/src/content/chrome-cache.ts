@@ -96,7 +96,15 @@ export function verdictFromCache(entry: JudgeCacheEntry, filterMode: FilterMode)
       case 'spam':
       case 'off_topic':
       case 'backseat':
-        // B3: カテゴリ別 ON/OFF UI 未実装のため allow（B4 で拡張）
+        // 既知の限界（B4a 🟡 で可視化、B4b/Phase 3.5 で解消予定）:
+        // verdictFromCache は filterMode しか受け取らないため、これらの
+        // カテゴリ ON/OFF を **キャッシュ再評価時** には反映できず常に allow。
+        // judge 時点では proxy 側 primaryToVerdict が context.settings の
+        // categories.{name}.enabled を見て正しい verdict を返すので、
+        // 初回判定は正しい。filterMode 変更後のキャッシュ再評価でのみ
+        // 取りこぼす（稀なエッジ）。per-message ホットパスなので runtime
+        // ログは出さず本コメントで可視化する。
+        // TODO(B4b/3.5): verdictFromCache にカテゴリ enable を渡して厳密化
         return 'allow';
       default: {
         // B4a hardening D: コンパイル時網羅チェック。JudgmentLabel に
@@ -140,11 +148,23 @@ export const JUDGE_CACHE_KEY = 'fck_judge_cache';
 let _cache: Record<string, JudgeCacheEntry> = {};
 let _cacheLoaded = false;
 
-/** 起動時に一度だけ呼び出す。chrome.storage から判定キャッシュをメモリに読み込む。 */
+/**
+ * 起動時に一度だけ呼び出す。chrome.storage から判定キャッシュをメモリに読み込む。
+ * B4a hardening 🟡: chrome.storage 失敗を握り潰さず、失敗時は空キャッシュで
+ * 確定して継続（キャッシュ無し = 都度 Stage 2 判定。フィルタ機能自体は生きる）。
+ */
 export async function initStage2Cache(): Promise<void> {
   if (_cacheLoaded) return;
-  const result = await chrome.storage.local.get(JUDGE_CACHE_KEY);
-  _cache = (result[JUDGE_CACHE_KEY] as Record<string, JudgeCacheEntry> | undefined) ?? {};
+  try {
+    const result = await chrome.storage.local.get(JUDGE_CACHE_KEY);
+    _cache = (result[JUDGE_CACHE_KEY] as Record<string, JudgeCacheEntry> | undefined) ?? {};
+  } catch (err) {
+    console.error(
+      '[FreshChatKeeper] Stage 2 キャッシュの読み込みに失敗（空キャッシュで継続）:',
+      err,
+    );
+    _cache = {};
+  }
   _cacheLoaded = true;
 }
 

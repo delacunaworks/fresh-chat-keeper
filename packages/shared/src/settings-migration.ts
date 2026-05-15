@@ -165,10 +165,21 @@ function ensureUserBlocksV3(raw: unknown): FilterSettings['userBlocks'] {
   const metadataRaw = isPlainObject(raw.metadata) ? raw.metadata : {};
 
   const metadata: NonNullable<FilterSettings['userBlocks']>['metadata'] = {};
+  let droppedCount = 0;
   for (const [channelId, entry] of Object.entries(metadataRaw)) {
     if (isUserBlockMetadataEntry(entry)) {
       metadata[channelId] = entry;
+    } else {
+      droppedCount++;
     }
+  }
+  // B4a hardening 🟢: 無言ドロップは調査困難。件数を 1 行 warn で可視化。
+  if (droppedCount > 0) {
+    console.warn(
+      `[FreshChatKeeper] migrateSettings: dropped ${droppedCount} malformed userBlocks.metadata entr${
+        droppedCount === 1 ? 'y' : 'ies'
+      }`,
+    );
   }
   return { channelIds, metadata };
 }

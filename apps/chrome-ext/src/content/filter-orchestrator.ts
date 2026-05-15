@@ -128,14 +128,17 @@ function buildJudgeRequestPayload(
   videoTitle: string | undefined,
 ): JudgeRequestPayload {
   const context = buildJudgmentContext(settings, videoTitle);
-  return {
+  // B4a: shared JudgeRequest に context?/tier? を後方互換追加したので
+  // `as JudgeRequestPayload` キャスト不要（型のまま構築できる）。
+  const payload: JudgeRequestPayload = {
     messages: batch.map((c, i) => ({ id: String(i), text: c.text })),
     context: {
-      game: context.game,
+      ...(context.game ? { game: context.game } : {}),
       settings: context.settings,
     },
     tier: 'free',
-  } as JudgeRequestPayload;
+  };
+  return payload;
 }
 
 /**

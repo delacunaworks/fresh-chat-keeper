@@ -117,6 +117,12 @@ export function runStage1_5(
         confidence: spamResult.confidence,
       };
     }
+    // B4a hardening 🟡: spam を検出したが spam カテゴリ OFF のため見送り。
+    // サイレントに gray へ落ちると「なぜ弾かれない？」の調査が困難なので
+    // debug ログで可視化（通常運用ではノイズにならない debug レベル）。
+    console.debug(
+      `[FreshChatKeeper] Stage 1.5: spam pattern '${spamResult.type}' detected but spam category is OFF; passing through`,
+    );
   }
 
   return { outcome: 'gray', reason: 'needs_stage2' };

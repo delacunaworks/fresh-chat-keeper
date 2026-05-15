@@ -153,7 +153,31 @@ function readStoredVersion(raw: unknown): number | undefined | null {
 function stripVersion(raw: StoredSettings): Settings {
   const { version: _ignore, ...rest } = raw;
   void _ignore;
-  return { ...DEFAULT_SETTINGS, ...rest };
+  const merged: Settings = { ...DEFAULT_SETTINGS, ...rest };
+  // B4a hardening 🟡: 重要フィールドの型が壊れていたら警告して DEFAULT に補正。
+  // chrome.storage は別拡張・手動編集・旧バグで型不整合が混入しうる。
+  // サイレント補正だとサポート時に原因究明できないため warn で可視化する。
+  if (typeof merged.enabled !== 'boolean') {
+    console.warn('[FreshChatKeeper] settings.enabled の型不正、DEFAULT に補正');
+    merged.enabled = DEFAULT_SETTINGS.enabled;
+  }
+  if (merged.displayMode !== 'placeholder' && merged.displayMode !== 'hidden') {
+    console.warn('[FreshChatKeeper] settings.displayMode の値不正、DEFAULT に補正');
+    merged.displayMode = DEFAULT_SETTINGS.displayMode;
+  }
+  if (
+    merged.filterMode !== 'strict' &&
+    merged.filterMode !== 'standard' &&
+    merged.filterMode !== 'lenient'
+  ) {
+    console.warn('[FreshChatKeeper] settings.filterMode の値不正、DEFAULT に補正');
+    merged.filterMode = DEFAULT_SETTINGS.filterMode;
+  }
+  if (typeof merged.gameId !== 'string' || merged.gameId.length === 0) {
+    console.warn('[FreshChatKeeper] settings.gameId の型不正、DEFAULT に補正');
+    merged.gameId = DEFAULT_SETTINGS.gameId;
+  }
+  return merged;
 }
 
 /**
