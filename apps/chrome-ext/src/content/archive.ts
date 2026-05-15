@@ -26,6 +26,7 @@ import {
 import {
   runStage1_5,
   HistoryStore,
+  SPAM_DETECTION_THRESHOLDS,
   type Stage1_5Result,
 } from '@fresh-chat-keeper/judgment-engine/stage1_5';
 import { migrateSettings, type FilterSettings } from '@fresh-chat-keeper/shared';
@@ -1038,6 +1039,40 @@ function attachActionBar(el: Element, authorChannelId: string, text: string): vo
 let stage15MsgSeq = 0;
 
 /**
+ * Stage 1.5 timestamp 用の単調増加クロック（問題 1 修正）。
+ *
+ * 旧実装は `timestamp: Date.now()` を渡していた。リプレイ初期ロードは
+ * `#items` を `querySelectorAll().forEach(processMessage)` で全件**同一 tick**
+ * 処理するため、全コメントの timestamp が同値化し rapid_fire（同一 author が
+ * 10 秒以内に他発言 2 件以上）を誤爆して全コメントがブロックされていた。
+ *
+ * 対処（spam-detector / runStage1_5 のロジックは不変）:
+ * - 受信順で **単調増加**させ、全コメント同値化を防ぐ
+ * - archive_replay は動画内オフセットを DOM から取得できない（Phase 4 の
+ *   タイムスタンプ連動まで未実装）。合成スペーシングが rapid_fire を捏造
+ *   しないよう、連続コメント間隔を rapid_fire 窓 / しきい値から導いた
+ *   {@link STAGE15_ARCHIVE_STEP_MS} 以上に広げる。結果、archive では
+ *   合成タイムスタンプ由来の rapid_fire は発火しない（真の連投検出は
+ *   Phase 4 まで保留。self_copy_paste / coordinated は TTL ベースで継続）
+ * - live は実到着間隔を保つ（`Date.now()` 優先）。真の連投は実時刻で
+ *   引き続き検出可能。要件は「全コメント同値を避ける」だけなので step=1
+ */
+const STAGE15_ARCHIVE_STEP_MS =
+  Math.ceil(
+    SPAM_DETECTION_THRESHOLDS.RAPID_FIRE_WINDOW_MS /
+      SPAM_DETECTION_THRESHOLDS.RAPID_FIRE_THRESHOLD,
+  ) + 1000;
+let lastStage15Ts = 0;
+
+function nextStage15Timestamp(): number {
+  const now = Date.now();
+  const step = currentPageMode === 'archive_replay' ? STAGE15_ARCHIVE_STEP_MS : 1;
+  const next = now > lastStage15Ts + step ? now : lastStage15Ts + step;
+  lastStage15Ts = next;
+  return next;
+}
+
+/**
  * Stage 1.5（スパムパターン検出）を 1 コメントに適用する。
  *
  * @returns spam と確定してフィルタを適用したら true（呼び出し側は return）。
@@ -1048,16 +1083,25 @@ let stage15MsgSeq = 0;
  */
 function runStage1_5Filter(el: Element, text: string): boolean {
   const authorChannelId = getAuthorChannelIdFromElement(el);
+  const seq = stage15MsgSeq++;
+  // 問題 1: `getAuthorChannelIdFromElement` が空文字を返すと全コメントが
+  // 「同一ユーザー」化し rapid_fire / self_copy を誤爆する。空のときは
+  // メッセージごとに**一意なフォールバックキー**を使い per-user 履歴を
+  // 常に空にする（= rapid_fire / self_copy_paste は発火しない）。
+  // 横断 coordinated_copy_paste は「現メッセージと異なる channelId の
+  // 同一文言が 3 アカウント以上」で集計するため、一意キーでも別コメントの
+  // 同一文言は引き続き検出される（spam-detector のロジックは不変）。
+  const historyKey = authorChannelId || `__fck-anon-${seq}`;
   const result: Stage1_5Result = runStage1_5(
     {
-      id: `s15-${stage15MsgSeq++}`,
+      id: `s15-${seq}`,
       text,
-      authorChannelId,
+      authorChannelId: historyKey,
       authorDisplayName: authorChannelId,
-      // archive_replay でも wall-clock を使う。Stage 1.5 の rapid_fire は
-      // 「同一 author が 10 秒以内に 3 件」と保守的なので、リプレイの描画
-      // バーストでも誤検出しにくい。動画内オフセット連動は Phase 4 で対応。
-      timestamp: Date.now(),
+      // 問題 1: 実投稿時刻に近い受信順 monotonic を渡す（旧 `Date.now()` は
+      // リプレイ初期ロードの同一 tick 一括処理で全件同値化し rapid_fire を
+      // 誤爆していた）。詳細は nextStage15Timestamp の doc を参照。
+      timestamp: nextStage15Timestamp(),
     },
     { settings: buildStage1_5Settings() },
     historyStore,
