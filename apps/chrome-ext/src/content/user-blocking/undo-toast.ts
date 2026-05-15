@@ -179,3 +179,47 @@ export function showBlockUndoToast(displayName: string, channelId: string): void
 
   startAutoDismiss(toast);
 }
+
+/**
+ * 失敗トースト（B4a hardening C）。ブロック永続化に失敗した際に表示する。
+ * Undo ボタンは持たない（ブロック自体が成立していないため）。a11y は
+ * showBlockUndoToast と同方針（role=status / 遅延ライブリージョン /
+ * hover-focus pause / reduced-motion）。
+ *
+ * @param message 表示メッセージ（例: 「ブロックを保存できませんでした」）
+ */
+export function showBlockErrorToast(message: string): void {
+  ensureStylesInjected();
+
+  if (currentToast) {
+    currentToast.remove();
+    clearTimer();
+    currentToast = null;
+  }
+
+  const toast = document.createElement('div');
+  toast.className = 'fck-undo-toast';
+  toast.setAttribute('role', 'status');
+  toast.setAttribute('aria-live', 'polite');
+
+  const label = document.createElement('span');
+  toast.appendChild(label);
+
+  toast.addEventListener('mouseenter', clearTimer);
+  toast.addEventListener('mouseleave', () => startAutoDismiss(toast));
+  toast.addEventListener('focusin', clearTimer);
+  toast.addEventListener('focusout', (e) => {
+    const next = (e as FocusEvent).relatedTarget;
+    if (next instanceof Node && toast.contains(next)) return;
+    startAutoDismiss(toast);
+  });
+
+  document.body.appendChild(toast);
+  currentToast = toast;
+
+  requestAnimationFrame(() => {
+    label.textContent = message;
+  });
+
+  startAutoDismiss(toast);
+}

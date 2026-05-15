@@ -112,8 +112,18 @@ export function getUserBlockStore(): UserBlockStore {
   return { channelIds: [...storeCache.channelIds], metadata: { ...storeCache.metadata } };
 }
 
-async function persist(): Promise<void> {
-  await chrome.storage.local.set({ [USER_BLOCKS_KEY]: storeCache });
+/**
+ * storeCache を chrome.storage に永続化する。
+ * B4a hardening C: 失敗を握り潰さず boolean で返す（呼び出し側がロールバック）。
+ */
+async function persist(): Promise<boolean> {
+  try {
+    await chrome.storage.local.set({ [USER_BLOCKS_KEY]: storeCache });
+    return true;
+  } catch (err) {
+    console.error('[FreshChatKeeper] ユーザーブロックの永続化に失敗:', err);
+    return false;
+  }
 }
 
 /**
@@ -121,43 +131,77 @@ async function persist(): Promise<void> {
  * - `fck_user_blocks` に追加して永続化（重複はスキップ）
  * - 画面上の当該ユーザーの既存コメントを遡及非表示（テキスト書き換え方式）
  *
- * @param channelId 投稿者識別子（空文字なら no-op）
- * @param displayName ブロック時点の表示名
- * @param displayMode 既存スポイラーフィルタと同じ表示方式（呼び出し側 settings 由来）
+ * B4a hardening C: 永続化失敗時はメモリキャッシュ（storeCache / blockedSet）を
+ * ロールバックし `false` を返す（DOM 非表示も行わない＝状態の不整合を避ける）。
+ * 呼び出し側はトーストで失敗を可視化する。
+ *
+ * @returns 永続化成功（または既ブロックで no-op）なら true、失敗なら false
  */
 export async function blockUser(
   channelId: string,
   displayName: string,
   displayMode: DisplayMode,
-): Promise<void> {
+): Promise<boolean> {
   if (!channelId) {
     console.warn('[FreshChatKeeper] ブロック対象の channelId が空のため中止');
-    return;
+    return false;
   }
-  if (!blockedSet.has(channelId)) {
-    storeCache.channelIds.push(channelId);
-    storeCache.metadata[channelId] = {
-      displayNameAtBlock: displayName,
-      blockedAt: Date.now(),
-    };
-    blockedSet.add(channelId);
-    await persist();
+  if (blockedSet.has(channelId)) {
+    // 既にブロック済み: 遡及非表示だけ再適用（永続化は不要、成功扱い）
+    hideExistingMessagesFromUser(channelId, displayMode);
+    return true;
   }
+
+  // 楽観的に in-memory 更新 → 永続化 → 失敗ならロールバック
+  storeCache.channelIds.push(channelId);
+  storeCache.metadata[channelId] = {
+    displayNameAtBlock: displayName,
+    blockedAt: Date.now(),
+  };
+  blockedSet.add(channelId);
+
+  const ok = await persist();
+  if (!ok) {
+    storeCache.channelIds = storeCache.channelIds.filter((id) => id !== channelId);
+    delete storeCache.metadata[channelId];
+    blockedSet.delete(channelId);
+    return false;
+  }
+
   hideExistingMessagesFromUser(channelId, displayMode);
+  return true;
 }
 
 /**
  * ブロックを解除する。
  * - `fck_user_blocks` から除去して永続化
  * - 画面上の当該ユーザーのブロック済みコメントを復元
+ *
+ * B4a hardening C: 永続化失敗時はメモリキャッシュをロールバックし `false`。
+ *
+ * @returns 永続化成功（または未ブロックで no-op）なら true、失敗なら false
  */
-export async function unblockUser(channelId: string): Promise<void> {
-  if (!blockedSet.has(channelId)) return;
+export async function unblockUser(channelId: string): Promise<boolean> {
+  if (!blockedSet.has(channelId)) return true;
+
+  const removedMeta = storeCache.metadata[channelId];
   storeCache.channelIds = storeCache.channelIds.filter((id) => id !== channelId);
   delete storeCache.metadata[channelId];
   blockedSet.delete(channelId);
-  await persist();
+
+  const ok = await persist();
+  if (!ok) {
+    // ロールバック（順序は問わない、blockedSet が真実源）
+    if (!storeCache.channelIds.includes(channelId)) {
+      storeCache.channelIds.push(channelId);
+    }
+    if (removedMeta) storeCache.metadata[channelId] = removedMeta;
+    blockedSet.add(channelId);
+    return false;
+  }
+
   restoreMessagesFromUser(channelId);
+  return true;
 }
 
 /**

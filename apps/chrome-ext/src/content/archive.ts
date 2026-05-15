@@ -40,7 +40,7 @@ import {
   isUserBlocked,
   blockUser,
 } from './user-blocking/blocking.js';
-import { showBlockUndoToast } from './user-blocking/undo-toast.js';
+import { showBlockUndoToast, showBlockErrorToast } from './user-blocking/undo-toast.js';
 import type { GenreTemplate } from '@fresh-chat-keeper/knowledge-base';
 import { filterMessageElement, restoreMessageElement, switchDisplayMode, ATTR_FALSE_POSITIVE } from './chat-dom.js';
 import {
@@ -255,8 +255,13 @@ export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
   actionBarManager.init({
     onBlock: async (channelId, displayName) => {
       const displayMode = currentSettings?.displayMode ?? 'placeholder';
-      await blockUser(channelId, displayName, displayMode);
-      showBlockUndoToast(displayName, channelId);
+      const ok = await blockUser(channelId, displayName, displayMode);
+      if (ok) {
+        showBlockUndoToast(displayName, channelId);
+      } else {
+        // B4a hardening C: 永続化失敗を可視化（ロールバック済みなので未ブロック）
+        showBlockErrorToast('ブロックを保存できませんでした。もう一度お試しください');
+      }
     },
   });
 
