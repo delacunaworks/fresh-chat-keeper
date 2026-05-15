@@ -16,9 +16,10 @@
  *   この時点で互換性を切る
  */
 
+import type { JudgmentLabel } from '@fresh-chat-keeper/shared';
 import type { GameProgress, FilterMode } from '../shared/settings.js';
 
-/** proxy の LLM が返す spoiler_category 値 */
+/** proxy の LLM が返す spoiler_category 値（Phase 2 互換 / 後方互換ブリッジ） */
 export type LLMSpoilerCategory = 'direct_spoiler' | 'foreshadowing_hint' | 'gameplay_hint' | 'safe';
 
 const LLM_CATEGORY_SET = new Set<string>([
@@ -30,12 +31,31 @@ const LLM_CATEGORY_SET = new Set<string>([
 
 export type Stage2Verdict = 'block' | 'allow';
 
+/**
+ * Stage 2 判定結果のキャッシュエントリ。
+ *
+ * Phase 3（v0.4.0）でマルチラベル化:
+ * - `primary` / `labels` が新しい正のフィールド（proxy が `FilterResult.primary`
+ *   `FilterResult.labels` を返す）
+ * - `spoilerCategory` は **後方互換フィールド**。v0.3.x で保存された既存
+ *   `fck_judge_cache` エントリ（primary/labels を持たない）と、proxy の
+ *   後方互換ブリッジ（B3 hardening）経由で来る値を読むために残す。
+ *
+ * すべて optional。判定失敗（LLM エラー / JSON パース失敗）は
+ * `primary` 未設定かつ `spoilerCategory: null` で表す。
+ */
 export interface JudgeCacheEntry {
+  /** Phase 3: 最も深刻な単一ラベル（labels から LABEL_PRECEDENCE で導出済み） */
+  primary?: JudgmentLabel;
+  /** Phase 3: マルチラベルの生結果 */
+  labels?: JudgmentLabel[];
   /**
-   * LLM が判定したカテゴリ。
-   * null は LLM 判定失敗（API エラー・JSON パース失敗）を表す。
+   * 後方互換: Phase 2 までの spoiler サブカテゴリ。
+   * - 旧 `fck_judge_cache` エントリ（primary なし）の読み出し
+   * - proxy 後方互換ブリッジ経由のレスポンス
+   * のために残す。null は LLM 判定失敗。
    */
-  spoilerCategory: LLMSpoilerCategory | null;
+  spoilerCategory?: LLMSpoilerCategory | null;
   confidence?: number;
 }
 
@@ -53,10 +73,35 @@ export type OnStage2Result = (candidate: Stage2Candidate, entry: JudgeCacheEntry
  * キャッシュエントリと現在のフィルタモードから verdict を導出する。
  * フィルタモードを変更しても proxy に再リクエストせずに正しい判定が得られる。
  *
- * - spoilerCategory が null（LLM 判定失敗）の場合: lenient → allow、それ以外 → block
+ * Phase 3 の評価順:
+ * 1. `primary` があれば優先（マルチラベル新経路）
+ *    - 'safe' → allow
+ *    - 'spoiler' → block（強度は Stage 2 プロンプト側で適用済みなので、
+ *      LLM が spoiler と判定した時点でブロック対象）
+ *    - 'harassment' / 'spam' / 'off_topic' / 'backseat' → allow
+ *      （B3 ではこれらのカテゴリ ON/OFF UI が未実装。Stage 1.5 の spam は
+ *      archive.ts 側で直接フィルタするので Stage 2 キャッシュには乗らない。
+ *      B4 でカテゴリ別 UI が入ったら強度・ON/OFF を反映する）
+ * 2. `primary` がなければ後方互換 `spoilerCategory` で判定（旧キャッシュ /
+ *    proxy ブリッジ）。null（判定失敗）は lenient→allow / その他→block
  */
 export function verdictFromCache(entry: JudgeCacheEntry, filterMode: FilterMode): Stage2Verdict {
-  const { spoilerCategory } = entry;
+  if (entry.primary !== undefined) {
+    switch (entry.primary) {
+      case 'safe':
+        return 'allow';
+      case 'spoiler':
+        return 'block';
+      case 'harassment':
+      case 'spam':
+      case 'off_topic':
+      case 'backseat':
+        // B3: カテゴリ別 ON/OFF UI 未実装のため allow（B4 で拡張）
+        return 'allow';
+    }
+  }
+
+  const spoilerCategory = entry.spoilerCategory ?? null;
   if (spoilerCategory === null) {
     return filterMode === 'lenient' ? 'allow' : 'block';
   }

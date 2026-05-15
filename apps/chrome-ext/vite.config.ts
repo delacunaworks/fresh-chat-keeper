@@ -76,6 +76,11 @@ export default defineConfig({
         find: '@fresh-chat-keeper/knowledge-base',
         replacement: resolve(__dirname, '../../packages/knowledge-base/src/index.ts'),
       },
+      // NOTE: '/stage1_5' は '/stage1' より **必ず前**（prefix 一致対策、B1/B2 引き継ぎ）
+      {
+        find: '@fresh-chat-keeper/judgment-engine/stage1_5',
+        replacement: resolve(__dirname, '../../packages/judgment-engine/src/stage1_5/index.ts'),
+      },
       {
         find: '@fresh-chat-keeper/judgment-engine/stage1',
         replacement: resolve(__dirname, '../../packages/judgment-engine/src/stage1/index.ts'),

@@ -26,6 +26,7 @@ import {
   type OnStage2Result,
   type Stage2Candidate,
 } from './chrome-cache.js';
+import type { JudgmentLabel } from '@fresh-chat-keeper/shared';
 
 /**
  * バッチ（最大5件）をプロキシに送信し、結果を onResult コールバックで返す。
@@ -64,9 +65,16 @@ export async function sendStage2Batch(
     const candidate = batch[idx];
     if (!candidate) continue;
 
-    const spoilerCategory = parseSpoilerCategory(result.spoilerCategory);
+    // Phase 3: proxy は labels/primary を返す（FilterResult 拡張）。
+    // 旧 proxy 互換のため spoilerCategory も後方互換ブリッジで届くので、
+    // primary が無いレスポンス（理論上は無いが念のため）は spoilerCategory に
+    // フォールバックする。両方無ければ判定失敗扱い（spoilerCategory: null）。
+    const primary = sanitizeLabel(result.primary);
+    const labels = sanitizeLabels(result.labels);
     const entry: JudgeCacheEntry = {
-      spoilerCategory,
+      ...(primary ? { primary } : {}),
+      ...(labels.length > 0 ? { labels } : {}),
+      spoilerCategory: parseSpoilerCategory(result.spoilerCategory),
       ...(result.confidence !== undefined ? { confidence: result.confidence } : {}),
     };
 
@@ -77,6 +85,30 @@ export async function sendStage2Batch(
   }
 
   return true;
+}
+
+// ─── マルチラベル sanitize ─────────────────────────────────────────────────
+
+const VALID_LABEL_SET = new Set<JudgmentLabel>([
+  'safe',
+  'spoiler',
+  'harassment',
+  'spam',
+  'off_topic',
+  'backseat',
+]);
+
+/** proxy レスポンスの primary を JudgmentLabel に narrowing（不正値は undefined）。 */
+function sanitizeLabel(raw: unknown): JudgmentLabel | undefined {
+  return typeof raw === 'string' && VALID_LABEL_SET.has(raw as JudgmentLabel)
+    ? (raw as JudgmentLabel)
+    : undefined;
+}
+
+/** proxy レスポンスの labels[] を JudgmentLabel[] に narrowing（不正要素は除外）。 */
+function sanitizeLabels(raw: unknown): JudgmentLabel[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((l): l is JudgmentLabel => sanitizeLabel(l) !== undefined);
 }
 
 // ─── ペイロード構築（新形式: context + tier）─────────────────────────────────

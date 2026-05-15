@@ -61,8 +61,8 @@ export interface JudgmentRawData {
   primaryLabel: CollectionLabel;
   /** Stage 1 確定時は 1.0、Stage 2 LLM 信頼度は 0〜1 */
   confidence: number;
-  /** stage1 / stage2（stage1_5 は Phase 3+） */
-  stage: 'stage1' | 'stage2';
+  /** stage1 / stage1_5（Phase 3 spam 検出）/ stage2 */
+  stage: 'stage1' | 'stage1_5' | 'stage2';
   reasonJa: string | null;
 
   labelSource: LabelSource;

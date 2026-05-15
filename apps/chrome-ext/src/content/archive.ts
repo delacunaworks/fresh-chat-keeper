@@ -23,6 +23,12 @@ import {
   matchesGameplayHintForStage2,
   isObviouslySafe,
 } from '@fresh-chat-keeper/judgment-engine/stage1';
+import {
+  runStage1_5,
+  HistoryStore,
+  type Stage1_5Result,
+} from '@fresh-chat-keeper/judgment-engine/stage1_5';
+import { migrateSettings, type FilterSettings } from '@fresh-chat-keeper/shared';
 import type { GenreTemplate } from '@fresh-chat-keeper/knowledge-base';
 import { filterMessageElement, restoreMessageElement, switchDisplayMode, ATTR_FALSE_POSITIVE } from './chat-dom.js';
 import {
@@ -98,6 +104,8 @@ function shutdownOnInvalidContext(): void {
   itemsObserver?.disconnect();
   itemsObserver = null;
   clearStage2Queue();
+  // Stage 1.5 履歴を破棄（メモリ解放 + 再注入時のクロスストリーム汚染防止）
+  historyStore.clear();
   // Phase 2.5: ingest バッファをフラッシュ（拡張更新前に直近のログを救う）。
   // chrome.runtime が無効化されている場合 fetch も失敗するが try で保護される。
   void shutdownCollectionEmitter();
@@ -153,6 +161,40 @@ let currentPageMode: 'archive_replay' | 'live' = 'archive_replay';
 
 /** 配信開始時刻（live モードのみ。archive は常に null） */
 let liveStartedAtMs: number | null = null;
+
+/**
+ * Stage 1.5（パターン分析）用のメモリ内履歴ストア（タブ＝iframe 単位で 1 個）。
+ *
+ * チャットリプレイ iframe は配信切替時に YouTube が破棄・再生成するため、
+ * content script が再注入され本モジュール（=この HistoryStore）も作り直される。
+ * 結果、配信ごとに自然にフレッシュな履歴になる。明示的な URL 監視は持たない
+ * （既存アーキテクチャに URL watcher が無く、Phase 4 のタイムスタンプ連動で
+ * 動画追跡を実装する際に併せて導入予定。B4 引き継ぎ）。
+ * 防御的に、コンテキスト無効化時（拡張リロード等）に clear() する。
+ */
+const historyStore = new HistoryStore();
+
+/**
+ * Stage 1.5 に渡す FilterSettings（v3）。
+ *
+ * chrome-ext 独自 Settings 型にはまだカテゴリ別 ON/OFF UI が無い（B4 / P3-UI-04）。
+ * B3 では Stage 1.5 spam 検出を機能させて手動テスト可能にするため、
+ * spam を enabled で固定する。Stage 1.5 spam の閾値は保守的
+ * （10 秒 3 連投 / 完全一致コピペ / 10 文字以上連打）で誤検出 < 5% 設計なので、
+ * UI が無い B3 でも既定 ON を許容する。
+ * B4 で P3-UI-04 がカテゴリ別トグル UI を実装したら、設計書「新カテゴリは
+ * デフォルト OFF」の方針に従って既定値を見直すこと（B4 引き継ぎ）。
+ */
+const STAGE1_5_SETTINGS: FilterSettings = (() => {
+  const base = migrateSettings({});
+  return {
+    ...base,
+    categories: {
+      ...base.categories,
+      spam: { enabled: true },
+    },
+  };
+})();
 
 /**
  * emit スキップの warn を 1 度だけ出すためのフラグ。
@@ -479,6 +521,15 @@ function processMessage(el: Element): void {
     return;
   }
 
+  // ── Stage 1.5: パターン分析（スパム検出） ─────────────────────────────────
+  // Stage 1（spoiler キーワード）を通過したコメントに対し、連投・コピペ・
+  // 文字連打・URL羅列・絵文字連打などのスパムパターンを LLM 呼び出し前に検出。
+  // spoiler キーワードに当たったコメントは上で return 済みなので、ここに来る
+  // 時点で primary 優先順位（spoiler > spam）の競合は起きない。
+  if (runStage1_5Filter(el, text)) {
+    return;
+  }
+
   // ── Stage 2: キーワード単体マッチ → プロキシへ委託 ──────────────────────────
   const stage2keyword = matchesKeywordForStage2(text, currentKeywords);
   if (!stage2keyword) {
@@ -620,7 +671,7 @@ function emitJudgmentForElement(
     labels: import('@fresh-chat-keeper/shared').CollectionLabel[];
     primaryLabel: import('@fresh-chat-keeper/shared').CollectionLabel;
     confidence: number;
-    stage: 'stage1' | 'stage2';
+    stage: 'stage1' | 'stage1_5' | 'stage2';
     reasonJa: string | null;
     labelSource: import('@fresh-chat-keeper/shared').LabelSource;
   },
@@ -688,13 +739,25 @@ function applyStage2Verdict(candidate: Stage2Candidate, entry: JudgeCacheEntry):
   // emit すると el がフィルタ書き換え後で textContent が変わるので、
   // フィルタ適用前にここで emit する。
   if (el && el.textContent?.trim() === candidate.text) {
-    const isBlocked = entry.spoilerCategory === 'direct_spoiler'
-      || entry.spoilerCategory === 'foreshadowing_hint'
-      || entry.spoilerCategory === 'gameplay_hint';
+    // Phase 3: マルチラベル primary/labels を優先。旧キャッシュ / proxy ブリッジ
+    // 経由で primary が無い場合のみ spoilerCategory から spoiler/safe を導出。
+    let emitLabels: import('@fresh-chat-keeper/shared').CollectionLabel[];
+    let emitPrimary: import('@fresh-chat-keeper/shared').CollectionLabel;
+    if (entry.primary !== undefined) {
+      emitPrimary = entry.primary;
+      emitLabels =
+        entry.labels && entry.labels.length > 0 ? entry.labels : [entry.primary];
+    } else {
+      const isBlocked = entry.spoilerCategory === 'direct_spoiler'
+        || entry.spoilerCategory === 'foreshadowing_hint'
+        || entry.spoilerCategory === 'gameplay_hint';
+      emitPrimary = isBlocked ? 'spoiler' : 'safe';
+      emitLabels = [emitPrimary];
+    }
     emitJudgmentForElement(el, candidate.text, {
       stageACategory: 'unknown',
-      labels: isBlocked ? ['spoiler'] : ['safe'],
-      primaryLabel: isBlocked ? 'spoiler' : 'safe',
+      labels: emitLabels,
+      primaryLabel: emitPrimary,
       confidence: entry.confidence ?? 1.0,
       stage: 'stage2',
       reasonJa: null,
@@ -721,7 +784,15 @@ function applyStage2Verdict(candidate: Stage2Candidate, entry: JudgeCacheEntry):
   // ユーザーが展開済みのテキストはスキップ
   if (revealedTexts.has(candidate.text)) return;
 
-  applyFilter(el, candidate.text, candidate.matchedKeyword, undefined, entry.spoilerCategory);
+  // MisreportEntry.spoilerCategory（string|null）には primary を優先記録。
+  // primary が無い旧経路は従来通り spoilerCategory。
+  applyFilter(
+    el,
+    candidate.text,
+    candidate.matchedKeyword,
+    undefined,
+    entry.primary ?? entry.spoilerCategory ?? null,
+  );
 }
 
 /** フィルタを適用して filterCount をインクリメントする共通処理 */
@@ -835,6 +906,57 @@ function emitStage1SpoilerLog(el: Element, text: string): void {
     reasonJa: null,
     labelSource: 'haiku',
   });
+}
+
+/** Stage 1.5 に渡す Message.id 用の単調増加シーケンス（タブ内一意で十分）。 */
+let stage15MsgSeq = 0;
+
+/**
+ * Stage 1.5（スパムパターン検出）を 1 コメントに適用する。
+ *
+ * @returns spam と確定してフィルタを適用したら true（呼び出し側は return）。
+ *          gray（=スパムでない）なら false（Stage 2 へ続行）。
+ *
+ * 履歴ストアへの追加は runStage1_5 が判定後に内部で行う（自己コピペ・連投の
+ * 誤発火を避けるため判定の「後」に積む設計、judgment-engine 側の仕様）。
+ */
+function runStage1_5Filter(el: Element, text: string): boolean {
+  const authorChannelId = getAuthorChannelIdFromElement(el);
+  const result: Stage1_5Result = runStage1_5(
+    {
+      id: `s15-${stage15MsgSeq++}`,
+      text,
+      authorChannelId,
+      authorDisplayName: authorChannelId,
+      // archive_replay でも wall-clock を使う。Stage 1.5 の rapid_fire は
+      // 「同一 author が 10 秒以内に 3 件」と保守的なので、リプレイの描画
+      // バーストでも誤検出しにくい。動画内オフセット連動は Phase 4 で対応。
+      timestamp: Date.now(),
+    },
+    { settings: STAGE1_5_SETTINGS },
+    historyStore,
+  );
+
+  if (result.outcome !== 'filter') return false;
+
+  // spam 確定。Phase 2.5 ingest にも stage1_5 ログを残す（フィルタ書き換え前）。
+  if (el.textContent?.trim() === text) {
+    emitJudgmentForElement(el, text, {
+      stageACategory: 'unknown',
+      labels: ['spam'],
+      primaryLabel: 'spam',
+      confidence: result.confidence,
+      stage: 'stage1_5',
+      reasonJa: result.reason,
+      labelSource: 'haiku',
+    });
+  }
+
+  // CLAUDE.md 設計原則 6: 非表示は display:none でなくテキスト書き換え。
+  // applyFilter は内部で filterMessageElement（data-fck-original 退避）を使う。
+  // 第5引数 spoilerCategory（MisreportEntry 用、string|null）に 'spam' を渡す。
+  applyFilter(el, text, `spam:${result.reason}`, undefined, 'spam');
+  return true;
 }
 
 /** YouTube の親フレーム URL から videoId を抽出（取得不能なら空文字） */
