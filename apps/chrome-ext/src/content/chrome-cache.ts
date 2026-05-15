@@ -173,13 +173,32 @@ export function getCachedVerdict(cacheKey: string): JudgeCacheEntry | null {
   return _cache[cacheKey] ?? null;
 }
 
-/** 判定結果をメモリキャッシュと chrome.storage の両方に保存する。 */
+/**
+ * 判定結果をメモリキャッシュと chrome.storage の両方に保存する。
+ *
+ * B5 silent-failure hardening: chrome.storage.local.set 失敗を握り潰さない。
+ * メモリキャッシュは更新済みなので当該タブでは判定が効くが、永続化に失敗
+ * したことを warn で可視化し boolean で呼び出し側へ返す（リロード後に再判定
+ * になることの調査手掛かりを残す）。throw しないのは 1 件の保存失敗で
+ * バッチ全体（onResult 適用）を巻き込まないため。
+ *
+ * @returns 永続化に成功したら true、失敗したら false（メモリには反映済み）
+ */
 export async function saveJudgeCacheEntry(
   cacheKey: string,
   entry: JudgeCacheEntry,
-): Promise<void> {
+): Promise<boolean> {
   _cache[cacheKey] = entry;
-  await chrome.storage.local.set({ [JUDGE_CACHE_KEY]: _cache });
+  try {
+    await chrome.storage.local.set({ [JUDGE_CACHE_KEY]: _cache });
+    return true;
+  } catch (err) {
+    console.warn(
+      '[FreshChatKeeper] Stage 2 キャッシュの永続化に失敗（メモリのみ反映、リロードで再判定）:',
+      err,
+    );
+    return false;
+  }
 }
 
 /**

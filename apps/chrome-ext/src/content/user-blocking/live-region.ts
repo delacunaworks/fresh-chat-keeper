@@ -17,6 +17,13 @@ const ASSERTIVE_REGION_ID = 'fck-live-region-assertive';
 /** 同一メッセージを連続投入する間隔の下限（読み上げ猶予、1 フレーム + α） */
 const DRAIN_INTERVAL_MS = 350;
 
+/**
+ * polite キューの上限（B5 silent-failure hardening）。
+ * ライブチャットで流去告知が連発するとキューが無限に伸び、読み上げが
+ * 何分も遅延して実質ノイズ化する。上限超過分は破棄し warn で可視化する。
+ */
+const MAX_POLITE_QUEUE = 5;
+
 interface RegionState {
   el: HTMLElement;
   queue: string[];
@@ -76,7 +83,23 @@ export function announce(
   if (!message) return;
   const kind = opts?.assertive ? 'assertive' : 'polite';
   const state = ensureRegion(kind);
-  state.queue.push(message);
+
+  if (kind === 'assertive') {
+    // B5 hardening: エラー/必須通知は緊急。既存キュー（古い assertive）を
+    // クリアしてから push し、先頭割り込みで最新のエラーを最優先で読ませる
+    // （drain 中の 1 件は読み上げ猶予のため中断しない）。
+    state.queue.length = 0;
+    state.queue.push(message);
+  } else {
+    // B5 hardening: polite はキュー上限超過分を破棄（無限遅延でノイズ化を防ぐ）。
+    if (state.queue.length >= MAX_POLITE_QUEUE) {
+      console.warn(
+        `[FreshChatKeeper] live-region polite キューが上限(${MAX_POLITE_QUEUE})に達したため告知を破棄: "${message}"`,
+      );
+      return;
+    }
+    state.queue.push(message);
+  }
   drain(kind);
 }
 

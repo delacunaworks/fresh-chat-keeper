@@ -447,8 +447,16 @@ async function judgeBatch(
         detail = parseMultiLabelResponseDetailed(text, messageIds);
       }
       if (detail.degraded) {
+        // B5 silent-failure hardening: リトライ後の失敗理由も classifyParse の
+        // status（no_array / json_error）を含めて記録する（初回 warn と
+        // 同粒度。LLM 出力の壊れ方の切り分けに必要）。
+        const retryCls = classifyParse(text);
         console.warn(
-          '[FreshChatKeeper] Stage 2 parse still failing after retry; returning all-safe (degraded), not caching',
+          `[FreshChatKeeper] Stage 2 parse still failing after retry (${retryCls.status})${
+            retryCls.error
+              ? `: ${retryCls.error instanceof Error ? retryCls.error.message : String(retryCls.error)}`
+              : ''
+          }; returning all-safe (degraded), not caching`,
         );
       }
     }

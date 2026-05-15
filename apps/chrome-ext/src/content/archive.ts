@@ -267,7 +267,7 @@ export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
     // （フィルタ済み→FP / 表示中→FN）。
     getReportKind: (target) => reportKindForElement(target.messageEl),
     onReport: (target, reportedLabel) => {
-      handleReport(target.messageEl, target.text, reportedLabel);
+      void handleReport(target.messageEl, target.text, reportedLabel);
     },
   });
 
@@ -915,11 +915,11 @@ function reportKindForElement(messageEl: HTMLElement | null): ReportKind {
  * - `correctLabel` / `failureCategory` は reportKind / reportedLabel から導出
  *   （旧ハードコード `correctLabel:'safe'` / `failureCategory:null` を置換）
  */
-function handleReport(
+async function handleReport(
   messageEl: HTMLElement | null,
   text: string,
   reportedLabel: ReportedLabel | undefined,
-): void {
+): Promise<void> {
   if (!currentSettings) return;
   const settings = currentSettings;
   const reportedAt = new Date().toISOString();
@@ -1012,7 +1012,17 @@ function handleReport(
     }
   }
 
-  saveMisreport(entry);
+  // B5 silent-failure hardening: saveMisreport（chrome.storage）失敗を握り
+  // 潰さない。emit（サーバ送信）は上で完了している一方ローカル保存が無言で
+  // 失敗すると「報告したのに misreports に残らない」不整合になるため warn。
+  try {
+    await saveMisreport(entry);
+  } catch (err) {
+    console.warn(
+      '[FreshChatKeeper] 誤判定報告のローカル保存に失敗:',
+      err,
+    );
+  }
 }
 
 /** アクションバー紐付け済みマーカー（多重 addEventListener 防止） */

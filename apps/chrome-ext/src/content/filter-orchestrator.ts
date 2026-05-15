@@ -87,8 +87,18 @@ export async function sendStage2Batch(
     // verdict 計算は archive.ts 側で applyStage2Verdict が verdictFromCache を呼ぶ。
     // degraded のときは保存をスキップ（再判定余地を残す）。onResult はその場の
     // verdict 適用のため degraded でも必ず呼ぶ。
+    // B5 silent-failure hardening: saveJudgeCacheEntry は永続化失敗を boolean で
+    // 返し内部で warn 済み。false（永続化失敗）でもメモリには反映されており
+    // その場の verdict は onResult で適用するため、ここでは degraded 同様
+    // 「リロードで再判定」に格下げするだけで処理は継続する（warn は出力済み）。
     if (!degraded) {
-      await saveJudgeCacheEntry(candidate.cacheKey, entry);
+      const persisted = await saveJudgeCacheEntry(candidate.cacheKey, entry);
+      if (!persisted) {
+        console.debug(
+          `[FreshChatKeeper] Stage 2 判定 "${candidate.cacheKey}" は永続化失敗。` +
+            `当該タブではメモリキャッシュで動作、リロード後は再判定。`,
+        );
+      }
     }
     onResult(candidate, entry);
   }
