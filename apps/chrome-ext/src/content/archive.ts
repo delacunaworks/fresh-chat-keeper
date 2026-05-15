@@ -40,6 +40,7 @@ import {
   isUserBlocked,
   blockUser,
 } from './user-blocking/blocking.js';
+import { showBlockUndoToast } from './user-blocking/undo-toast.js';
 import type { GenreTemplate } from '@fresh-chat-keeper/knowledge-base';
 import { filterMessageElement, restoreMessageElement, switchDisplayMode, ATTR_FALSE_POSITIVE } from './chat-dom.js';
 import {
@@ -255,7 +256,7 @@ export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
     onBlock: async (channelId, displayName) => {
       const displayMode = currentSettings?.displayMode ?? 'placeholder';
       await blockUser(channelId, displayName, displayMode);
-      // Undo トーストは P3-UI-03 でこの後に差し込む
+      showBlockUndoToast(displayName, channelId);
     },
   });
 
