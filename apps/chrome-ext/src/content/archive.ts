@@ -34,9 +34,8 @@ import {
   getChannelIdFromDom,
   getAuthorChannelIdFromElement,
 } from './author-extract.js';
-import { actionBarManager } from './user-blocking/hover-manager.js';
+import { actionMenuManager } from './user-blocking/menu-manager.js';
 import type { ReportedLabel, ReportKind } from './user-blocking/report-form.js';
-import { setupChatRemovalObserver } from './user-blocking/observer.js';
 import {
   initUserBlocks,
   isUserBlocked,
@@ -252,7 +251,7 @@ export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
   // ユーザーブロックリストをメモリへ読み込み（以降 processMessage が同期判定）。
   // アクションバーの 🚫 ハンドラを注入し、グローバル ESC を有効化する。
   void initUserBlocks(() => currentSettings?.displayMode ?? 'placeholder');
-  actionBarManager.init({
+  actionMenuManager.init({
     onBlock: async (channelId, displayName) => {
       const displayMode = currentSettings?.displayMode ?? 'placeholder';
       const ok = await blockUser(channelId, displayName, displayMode);
@@ -264,10 +263,11 @@ export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
       }
     },
     // P3-UI-06: 報告種別はコメントの表示状態から自動判定
-    // （フィルタ済み→FP / 表示中→FN）。
+    // （フィルタ済み→FP / 表示中→FN）。⚠️ 押下時に 1 回だけ評価され、
+    // menu-manager がスナップショットして onReport に渡す（送信時再計算しない）。
     getReportKind: (target) => reportKindForElement(target.messageEl),
-    onReport: (target, reportedLabel) => {
-      void handleReport(target.messageEl, target.text, reportedLabel);
+    onReport: (target, reportedLabel, reportKind) => {
+      void handleReport(target.messageEl, target.text, reportedLabel, reportKind);
     },
   });
 
@@ -402,9 +402,11 @@ function waitForItemsContainer(): void {
 function observeItems(itemsContainer: Element): void {
   itemsContainerRef = itemsContainer;
 
-  // Hover-Safe Pattern 原則4: コメント流去時にアクションバーの参照を無効化
-  // （バー自体は維持）。Stage 1.5 / ブロック対象の DOM 削除耐性に必要。
-  setupChatRemovalObserver(itemsContainer);
+  // B5（案A 行内アンカー）: トリガはコメント renderer の子要素なので、
+  // コメントが流れて消えてもトリガごと自然に消える。旧 Hover-Safe Pattern
+  // 原則4 の DOM 削除耐性（observer.ts / invalidateMessageRef）は不要に
+  // なったため撤去した（メニュー展開中に renderer が消えても、body 直下の
+  // メニューはスナップショット済みメタで操作継続可能）。
 
   itemsContainer.querySelectorAll(MSG_TEXT_SELECTOR).forEach((el) => {
     processMessage(el);
@@ -914,16 +916,21 @@ function reportKindForElement(messageEl: HTMLElement | null): ReportKind {
  *   欠落時はローカル保存のみ）
  * - `correctLabel` / `failureCategory` は reportKind / reportedLabel から導出
  *   （旧ハードコード `correctLabel:'safe'` / `failureCategory:null` を置換）
+ *
+ * B5 silent-failure hardening: reportKind は **menu-manager が ⚠️ 押下時に
+ * スナップショットした値**を引数で受け取り、送信時に再計算しない。報告
+ * フォーム入力中に Stage 2 解決などで #message の data-fck-filtered が
+ * 変化しても FP/FN が反転しない（DOM トランジション競合解消）。
  */
 async function handleReport(
   messageEl: HTMLElement | null,
   text: string,
   reportedLabel: ReportedLabel | undefined,
+  reportKind: ReportKind,
 ): Promise<void> {
   if (!currentSettings) return;
   const settings = currentSettings;
   const reportedAt = new Date().toISOString();
-  const reportKind = reportKindForElement(messageEl);
 
   const entry: MisreportEntry = {
     text,
@@ -1025,16 +1032,17 @@ async function handleReport(
   }
 }
 
-/** アクションバー紐付け済みマーカー（多重 addEventListener 防止） */
+/** トリガ挿入済みマーカー（多重挿入防止） */
 const ATTR_AB_ATTACHED = 'data-fck-ab-attached';
-/** アクションバーの messageKey 用シーケンス（同一コメント再ホバー判定に使用） */
+/** メニュー messageKey 用シーケンス（同一コメント再アタッチ判定に使用） */
 let actionBarKeySeq = 0;
 
 /**
- * コメント要素にホバーアクションバーを紐付ける（renderer 行単位、1 回だけ）。
+ * コメント renderer に行内トリガ（クリックでアクションメニュー）を挿入する
+ * （renderer 行単位、1 回だけ）。B5: 旧ホバーバー→行内アンカー方式へ置換。
  *
  * P3-UI-06: 誤判定報告（FP/FN）は **全コメント対象**なので、authorChannelId が
- * 空（DOM から識別子が取れない）でも紐付ける。その場合ブロックは成立しない
+ * 空（DOM から識別子が取れない）でも挿入する。その場合ブロックは成立しない
  * （blockUser が空 channelId を no-op + 失敗トースト）が、⚠️ 報告は機能する。
  *
  * @param text コメント本文スナップショット（流去後もプレビューで使う）
@@ -1047,7 +1055,7 @@ function attachActionBar(el: Element, authorChannelId: string, text: string): vo
   if (renderer.getAttribute(ATTR_AB_ATTACHED) === 'true') return;
   renderer.setAttribute(ATTR_AB_ATTACHED, 'true');
 
-  actionBarManager.attachToMessage(renderer, {
+  actionMenuManager.attachToMessage(renderer, {
     authorChannelId,
     // 2026-05 仕様では識別子＝表示ハンドルなので displayName も同値で十分
     authorDisplayName: authorChannelId,
