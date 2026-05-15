@@ -93,6 +93,41 @@ describe('toJudgmentLogRow', () => {
     expect(parsed.failureCategory).toBe('metaphor');
   });
 
+  it('Phase 3（P3-UI-06）拡大値の userFeedback も round-trip する', () => {
+    // correctLabel = 6 ラベル、failureCategory = 新カテゴリ体系。
+    // user_feedback_json は json_valid CHECK のみで値 CHECK が無いため
+    // 拡大値も保存・復元できる（migration 0002 の検証）。
+    const log = buildSampleLog({
+      labelSource: 'user_report',
+      userFeedback: {
+        reportedAt: '2026-05-15T10:05:00.000Z',
+        correctLabel: 'harassment',
+        failureCategory: 'backseat',
+        freeTextReason: null,
+      },
+    });
+    const row = toJudgmentLogRow(log, 'h-author', 'h-token', 0);
+    const parsed = JSON.parse(row.user_feedback_json!);
+    expect(parsed.correctLabel).toBe('harassment');
+    expect(parsed.failureCategory).toBe('backseat');
+
+    // FN スキップ相当（reportedLabel 無し）: correctLabel='unknown' /
+    // failureCategory=null も保存できる
+    const skip = buildSampleLog({
+      labelSource: 'user_report',
+      userFeedback: {
+        reportedAt: '2026-05-15T10:06:00.000Z',
+        correctLabel: 'unknown',
+        failureCategory: null,
+        freeTextReason: null,
+      },
+    });
+    const skipRow = toJudgmentLogRow(skip, 'h', 'h', 0);
+    const skipParsed = JSON.parse(skipRow.user_feedback_json!);
+    expect(skipParsed.correctLabel).toBe('unknown');
+    expect(skipParsed.failureCategory).toBeNull();
+  });
+
   it('reviewedByHuman: true → 1', () => {
     const log = buildSampleLog({ reviewedByHuman: true });
     const row = toJudgmentLogRow(log, 'a', 'b', 0);
