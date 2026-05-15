@@ -7,8 +7,12 @@
  * - [取り消し] で {@link unblockUser} を呼びフェードアウト
  * - 同時に 1 つだけ（新規表示時は既存トーストを即破棄）
  *
- * a11y: `role="status"` + `aria-live="polite"` で SR に通知。取り消しは
- * 実 `<button>`（キーボード操作可・aria-label 付き）。
+ * a11y（Hover-Safe a11y 原則 A-3、architecture.md §2.1.4.1）:
+ * - `role="status"` + `aria-live="polite"`。空要素を先に挿入し次フレームで
+ *   テキスト投入（読み上げを確実化）
+ * - hover / 内部フォーカス中は自動消滅タイマーを一時停止、離脱で再開
+ * - `prefers-reduced-motion: reduce` 時はフェードアニメーションを無効化
+ * - 取り消しは実 `<button>`（キーボード操作可・aria-label・focus-visible）
  *
  * スタイルは manifest content CSS を持たない方針に合わせ JS から `<style>`
  * を 1 回注入（hover-manager と同系統）。
@@ -38,6 +42,10 @@ const STYLE_TEXT = `
   animation: fck-toast-in 0.2s ease-out;
 }
 .fck-undo-toast.fck-toast-leaving { animation: fck-toast-out ${FADE_OUT_MS}ms ease-in forwards; }
+@media (prefers-reduced-motion: reduce) {
+  .fck-undo-toast { animation: none; }
+  .fck-undo-toast.fck-toast-leaving { animation: none; }
+}
 .fck-undo-toast button {
   background: #3b82f6;
   color: #fff;
@@ -80,7 +88,29 @@ function clearTimer(): void {
   }
 }
 
+/** A-3: 自動消滅タイマーを（再）開始する。hover/focus 離脱時にも呼ぶ。 */
+function startAutoDismiss(toast: HTMLElement): void {
+  clearTimer();
+  currentTimer = setTimeout(() => dismiss(toast), AUTO_DISMISS_MS);
+}
+
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  );
+}
+
 function dismiss(toast: HTMLElement): void {
+  if (prefersReducedMotion()) {
+    // アニメーション無効: 即座に除去
+    toast.remove();
+    if (currentToast === toast) {
+      currentToast = null;
+      clearTimer();
+    }
+    return;
+  }
   toast.classList.add('fck-toast-leaving');
   setTimeout(() => {
     toast.remove();
@@ -107,31 +137,45 @@ export function showBlockUndoToast(displayName: string, channelId: string): void
     currentToast = null;
   }
 
+  const safeName = displayName || 'このユーザー';
+
   const toast = document.createElement('div');
   toast.className = 'fck-undo-toast';
   toast.setAttribute('role', 'status');
   toast.setAttribute('aria-live', 'polite');
 
+  // A-3: ライブリージョンは空のまま先に挿入し、次フレームで本文を入れる。
+  // 生成と同時にテキストが入っていると SR が変化を検知できないことがある。
   const label = document.createElement('span');
-  // textContent でユーザー由来文字列を安全に挿入（XSS 防止）
-  label.textContent = `${displayName || 'このユーザー'} をブロックしました`;
+  toast.appendChild(label);
 
   const undoBtn = document.createElement('button');
   undoBtn.type = 'button';
   undoBtn.textContent = '取り消し';
-  undoBtn.setAttribute(
-    'aria-label',
-    `${displayName || 'このユーザー'} のブロックを取り消す`,
-  );
+  undoBtn.setAttribute('aria-label', `${safeName} のブロックを取り消す`);
   undoBtn.addEventListener('click', () => {
     void unblockUser(channelId);
     dismiss(toast);
   });
-
-  toast.appendChild(label);
   toast.appendChild(undoBtn);
-  document.body.appendChild(toast);
 
+  // A-3: hover / 内部フォーカス中は消滅タイマーを一時停止、離脱で再開
+  toast.addEventListener('mouseenter', clearTimer);
+  toast.addEventListener('mouseleave', () => startAutoDismiss(toast));
+  toast.addEventListener('focusin', clearTimer);
+  toast.addEventListener('focusout', (e) => {
+    const next = (e as FocusEvent).relatedTarget;
+    if (next instanceof Node && toast.contains(next)) return;
+    startAutoDismiss(toast);
+  });
+
+  document.body.appendChild(toast);
   currentToast = toast;
-  currentTimer = setTimeout(() => dismiss(toast), AUTO_DISMISS_MS);
+
+  // 次フレームで本文投入（textContent でユーザー由来文字列を安全に挿入）
+  requestAnimationFrame(() => {
+    label.textContent = `${safeName} をブロックしました`;
+  });
+
+  startAutoDismiss(toast);
 }
