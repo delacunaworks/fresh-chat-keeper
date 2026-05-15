@@ -3,15 +3,27 @@
  *
  * 検出パターン（評価順、最初にマッチしたものを返す）:
  *   1. rapid_fire           — 同一ユーザーによる連投（10秒以内に他の発言が2件以上）
+ *                             ※ 短文（≤ SHORT_TEXT_MAX_CODEPOINTS）は対象外
  *   2. self_copy_paste      — 同一ユーザーが過去に投稿した内容を再投稿（自己コピペ）
+ *                             ※ 短文でも維持（短い宣伝コピペ等はあり得る）
  *   3. coordinated_copy_paste — 別の3アカウント以上が同一文言を投稿（横断コピペ）
- *   4. character_repeat     — 同一文字を10回以上連打（「ああああああああああ」）
- *   5. url_spam             — URL が3件以上含まれる
- *   6. emoji_spam           — Unicode 絵文字が大半（80%超）かつ長さ20コードポイント超
+ *                             ※ 短文（≤ SHORT_TEXT_MAX_CODEPOINTS）は対象外
+ *   4. url_spam             — URL が3件以上含まれる（短文でも維持）
+ *   5. emoji_spam           — Unicode 絵文字が大半（80%超）かつ長さ20コードポイント超
+ *
+ * B5-fix（2026-05-15 実機フィードバック反映、非破壊）:
+ * - **character_repeat（同一文字連打）を Stage 1.5 確定検出から撤去**。
+ *   「あああああ」「うおおおお」等は叫び・感情表現でもあり、文字連打のみで
+ *   spam 確定すると誤検出が多い。`gray` に落として **Stage 2 LLM に委譲**し
+ *   文脈で叫び/スパムを判別する（CLAUDE.md 設計原則: 判別不能は安全側だが
+ *   叫びの全消しは体験破壊、LLM 文脈判定の方が精度が高い）
+ * - **短文（≤ SHORT_TEXT_MAX_CODEPOINTS コードポイント）は rapid_fire /
+ *   coordinated_copy_paste の対象外**。「ざわざわ」「うおお」「草」「888」等の
+ *   定番リアクションは複数人・短時間で自然に重なるため、これらを構造的に
+ *   保護する。self_copy_paste / url_spam / emoji_spam は短文でも維持
  *
  * 設計方針:
  * - false-positive を避けるため、各しきい値は保守的に設定
- *   （「888」「草www」「同じ感想を2回投稿」程度は spam にしない）
  * - 純粋関数。`HistoryStore` を直接参照せず、`UserMessageHistory` /
  *   `ChatWideHistory` を引数で受け取る（テスト容易性）
  *
@@ -30,24 +42,24 @@ const RAPID_FIRE_WINDOW_MS = 10_000;
 const RAPID_FIRE_THRESHOLD = 2;
 /** 横断コピペと判定する「異なるアカウント数」しきい値（>=） */
 const COORDINATED_THRESHOLD = 3;
-/**
- * 文字連打と判定する最小コードポイント長。
- * 全体が同一コードポイントのみで構成され、かつこの長さ以上で発火。
- */
-const CHARACTER_REPEAT_MIN_LENGTH = 10;
 /** URL 羅列と判定するしきい値（>=） */
 const URL_SPAM_THRESHOLD = 3;
 /** 絵文字スパムと判定する「絵文字コードポイント比率」（>=） */
 const EMOJI_SPAM_RATIO = 0.8;
 /** 絵文字スパムと判定する最小長（コードポイント単位） */
 const EMOJI_SPAM_MIN_LENGTH = 20;
+/**
+ * 「短文」と見なすコードポイント長の上限（<=）。これ以下のメッセージは
+ * rapid_fire / coordinated_copy_paste の対象外（定番リアクション保護）。
+ * 「ざわざわ」(4) / 「うおお」(3) / 「草」(1) / 「888」(3) を救う目安値。
+ */
+const SHORT_TEXT_MAX_CODEPOINTS = 6;
 
 export type SpamDetectionResult =
   | { type: 'none' }
   | { type: 'rapid_fire'; confidence: number }
   | { type: 'self_copy_paste'; confidence: number }
   | { type: 'coordinated_copy_paste'; confidence: number }
-  | { type: 'character_repeat'; confidence: number }
   | { type: 'url_spam'; confidence: number }
   | { type: 'emoji_spam'; confidence: number };
 
@@ -67,21 +79,27 @@ export function detectSpam(
   userHistory: UserMessageHistory,
   chatHistory: ChatWideHistory,
 ): SpamDetectionResult {
+  // B5-fix: 短文は定番リアクション（「ざわざわ」「うおお」「草」「888」等）が
+  // 複数人・短時間で自然に重なるため、rapid_fire / coordinated の対象外にする。
+  const isShortText =
+    Array.from(message.text).length <= SHORT_TEXT_MAX_CODEPOINTS;
+
   // 1. 連投: 直近 RAPID_FIRE_WINDOW_MS 内に同一ユーザーが他の発言を
-  //    RAPID_FIRE_THRESHOLD 件以上していたら連投扱い
-  //    （同一文言の連投は self_copy_paste で先に捕捉されるよう、ここでは
-  //     「他発言」のみを数える）
-  const recentByUser = userHistory.messages.filter(
-    (m) =>
-      message.timestamp - m.timestamp < RAPID_FIRE_WINDOW_MS &&
-      message.timestamp - m.timestamp >= 0 &&
-      m.text !== message.text,
-  );
-  if (recentByUser.length >= RAPID_FIRE_THRESHOLD) {
-    return { type: 'rapid_fire', confidence: 0.9 };
+  //    RAPID_FIRE_THRESHOLD 件以上していたら連投扱い（短文は除外）
+  if (!isShortText) {
+    const recentByUser = userHistory.messages.filter(
+      (m) =>
+        message.timestamp - m.timestamp < RAPID_FIRE_WINDOW_MS &&
+        message.timestamp - m.timestamp >= 0 &&
+        m.text !== message.text,
+    );
+    if (recentByUser.length >= RAPID_FIRE_THRESHOLD) {
+      return { type: 'rapid_fire', confidence: 0.9 };
+    }
   }
 
   // 2. 自己コピペ: 同一ユーザーが過去に全く同じ文言を投稿していた
+  //    （短文でも維持。短い宣伝コピペの連投はあり得る）
   const identicalByUser = userHistory.messages.filter(
     (m) => m.text === message.text,
   );
@@ -90,25 +108,23 @@ export function detectSpam(
   }
 
   // 3. 横断コピペ: 別アカウント COORDINATED_THRESHOLD 個以上が同一文言を投稿
-  //    （投稿者自身は除く。集計はアカウント単位、同一アカウントの複数投稿は1としてカウント）
-  const distinctOtherChannelIds = new Set<string>();
-  for (const m of chatHistory.messages) {
-    if (m.text === message.text && m.channelId !== message.authorChannelId) {
-      distinctOtherChannelIds.add(m.channelId);
+  //    （投稿者自身は除く。集計はアカウント単位。短文は除外）
+  if (!isShortText) {
+    const distinctOtherChannelIds = new Set<string>();
+    for (const m of chatHistory.messages) {
+      if (m.text === message.text && m.channelId !== message.authorChannelId) {
+        distinctOtherChannelIds.add(m.channelId);
+      }
+    }
+    if (distinctOtherChannelIds.size >= COORDINATED_THRESHOLD) {
+      return { type: 'coordinated_copy_paste', confidence: 0.85 };
     }
   }
-  if (distinctOtherChannelIds.size >= COORDINATED_THRESHOLD) {
-    return { type: 'coordinated_copy_paste', confidence: 0.85 };
-  }
 
-  // 4. 文字連打: 全体が同一コードポイントの繰り返しで、長さが
-  //    CHARACTER_REPEAT_MIN_LENGTH 以上（例: "ああああああああああ"）。
-  //    部分的に同一文字が並ぶケース（例: "おはよう！ああああ"）は誤検出を避けるため対象外。
-  if (isAllSameCharacterAndLong(message.text, CHARACTER_REPEAT_MIN_LENGTH)) {
-    return { type: 'character_repeat', confidence: 0.95 };
-  }
+  // 4. 同一文字連打（character_repeat）は B5-fix で撤去。叫び・感情表現と
+  //    区別困難なため gray に落として Stage 2 LLM の文脈判定に委譲する。
 
-  // 5. URL 羅列: URL が URL_SPAM_THRESHOLD 個以上
+  // 5. URL 羅列: URL が URL_SPAM_THRESHOLD 個以上（短文でも維持）
   const urlMatches = message.text.match(/https?:\/\/\S+/g) ?? [];
   if (urlMatches.length >= URL_SPAM_THRESHOLD) {
     return { type: 'url_spam', confidence: 0.9 };
@@ -121,28 +137,6 @@ export function detectSpam(
   }
 
   return { type: 'none' };
-}
-
-/**
- * テキスト全体が同一コードポイントで構成され、かつ長さが minLength 以上か。
- *
- * 単純な `/^(.)\1{N,}$/` 正規表現はサロゲートペア（絵文字等）で誤判定する
- * （上位/下位サロゲートそれぞれを別文字として扱うため、絵文字の連打が
- * 「2文字パターンの繰り返し」になり捕捉できない）。Array.from で
- * コードポイント単位に分割してから比較する。
- *
- * 設計判断: 設計書 `phase-3-multilabel.md` の正規表現 `/^(.)\1{9,}$/`
- * (= 全体一致の10文字以上同一文字) に揃えている。`/(.)\1{9,}/` のような
- * 部分一致版は誤検出が増えるため採用しない。
- */
-function isAllSameCharacterAndLong(text: string, minLength: number): boolean {
-  const codePoints = Array.from(text);
-  if (codePoints.length < minLength) return false;
-  const first = codePoints[0];
-  for (let i = 1; i < codePoints.length; i++) {
-    if (codePoints[i] !== first) return false;
-  }
-  return true;
 }
 
 /**
@@ -172,8 +166,8 @@ export const SPAM_DETECTION_THRESHOLDS = {
   RAPID_FIRE_WINDOW_MS,
   RAPID_FIRE_THRESHOLD,
   COORDINATED_THRESHOLD,
-  CHARACTER_REPEAT_MIN_LENGTH,
   URL_SPAM_THRESHOLD,
   EMOJI_SPAM_RATIO,
   EMOJI_SPAM_MIN_LENGTH,
+  SHORT_TEXT_MAX_CODEPOINTS,
 } as const;

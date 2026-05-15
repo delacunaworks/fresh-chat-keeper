@@ -75,19 +75,17 @@ describe('runStage1_5', () => {
   });
 
   describe('spam OFF 動作', () => {
+    // B5-fix: character_repeat 撤去のため、スパム条件は url_spam で確実発火させる
+    const URL_SPAM = 'https://a.com https://b.com https://c.com';
+
     it('spam.enabled = false なら、スパム条件を満たしても gray', () => {
-      // 10文字連打（character_repeat 確実発火）でも spam OFF なら gray
-      const r = runStage1_5(
-        buildMessage('あ'.repeat(15)),
-        buildContext(false),
-        store,
-      );
+      const r = runStage1_5(buildMessage(URL_SPAM), buildContext(false), store);
       expect(r.outcome).toBe('gray');
     });
 
     it('categories.spam 未設定（v2 既存ユーザー）でも gray（フェイルクローズド）', () => {
       const r = runStage1_5(
-        buildMessage('あ'.repeat(15)),
+        buildMessage(URL_SPAM),
         buildContext(undefined),
         store,
       );
@@ -95,31 +93,13 @@ describe('runStage1_5', () => {
     });
 
     it('spam OFF でも履歴は更新される', () => {
-      runStage1_5(
-        buildMessage('あ'.repeat(15)),
-        buildContext(false),
-        store,
-      );
+      runStage1_5(buildMessage(URL_SPAM), buildContext(false), store);
       const stats = store.getStats();
       expect(stats.chatMessageCount).toBe(1);
     });
   });
 
   describe('spam ON でフィルタ発火', () => {
-    it('character_repeat（10文字連打）は filter', () => {
-      const r = runStage1_5(
-        buildMessage('あ'.repeat(15)),
-        buildContext(true),
-        store,
-      );
-      expect(r).toEqual({
-        outcome: 'filter',
-        label: 'spam',
-        reason: 'character_repeat',
-        confidence: 0.95,
-      });
-    });
-
     it('URL 3つ羅列は filter', () => {
       const r = runStage1_5(
         buildMessage('https://a.com https://b.com https://c.com'),
@@ -134,21 +114,22 @@ describe('runStage1_5', () => {
     });
 
     it('連投検出（rapid_fire）も filter', () => {
+      // B5-fix: 短文（≤6）は rapid_fire 対象外なので 7+ 文字の文言で検証する
       // 1件目: gray、履歴に積まれる
       runStage1_5(
-        buildMessage('1つめ', { text: '1つめ', timestamp: BASE_TS - 5000 }),
+        buildMessage('1つめの発言です', { text: '1つめの発言です', timestamp: BASE_TS - 5000 }),
         buildContext(true),
         store,
       );
       // 2件目: 履歴1件しかないので gray
       runStage1_5(
-        buildMessage('2つめ', { text: '2つめ', timestamp: BASE_TS - 2000 }),
+        buildMessage('2つめの発言です', { text: '2つめの発言です', timestamp: BASE_TS - 2000 }),
         buildContext(true),
         store,
       );
       // 3件目: 履歴に2件あり、10秒以内、別文言 → rapid_fire 発火
       const r = runStage1_5(
-        buildMessage('3つめ', { text: '3つめ', timestamp: BASE_TS }),
+        buildMessage('3つめの発言です', { text: '3つめの発言です', timestamp: BASE_TS }),
         buildContext(true),
         store,
       );
@@ -185,12 +166,14 @@ describe('runStage1_5', () => {
   });
 
   describe('横断履歴の利用', () => {
-    it('別ユーザー3人の同一文言 → coordinated_copy_paste で filter', () => {
+    it('別ユーザー3人の同一文言（長文）→ coordinated_copy_paste で filter', () => {
+      // B5-fix: 短文（≤6）は coordinated 対象外なので 7+ 文字の文言で検証する
+      const COPY = 'スパムスパムスパム'; // 9 codepoints
       const t = BASE_TS - 3000;
       // 別ユーザーが先に同一文言を投稿
       runStage1_5(
-        buildMessage('スパム', {
-          text: 'スパム',
+        buildMessage(COPY, {
+          text: COPY,
           authorChannelId: 'UC_bob',
           timestamp: t,
         }),
@@ -198,8 +181,8 @@ describe('runStage1_5', () => {
         store,
       );
       runStage1_5(
-        buildMessage('スパム', {
-          text: 'スパム',
+        buildMessage(COPY, {
+          text: COPY,
           authorChannelId: 'UC_carol',
           timestamp: t + 1000,
         }),
@@ -207,8 +190,8 @@ describe('runStage1_5', () => {
         store,
       );
       runStage1_5(
-        buildMessage('スパム', {
-          text: 'スパム',
+        buildMessage(COPY, {
+          text: COPY,
           authorChannelId: 'UC_dave',
           timestamp: t + 2000,
         }),
@@ -217,7 +200,7 @@ describe('runStage1_5', () => {
       );
       // alice が同じ文言を流す
       const r = runStage1_5(
-        buildMessage('スパム', { text: 'スパム', timestamp: BASE_TS }),
+        buildMessage(COPY, { text: COPY, timestamp: BASE_TS }),
         buildContext(true),
         store,
       );

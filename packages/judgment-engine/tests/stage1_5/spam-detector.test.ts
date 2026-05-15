@@ -2,11 +2,14 @@
  * detectSpam の単体テスト。
  *
  * 検証観点:
- * - 6 パターン（rapid_fire / self_copy_paste / coordinated_copy_paste /
- *   character_repeat / url_spam / emoji_spam）それぞれが検出される
+ * - 5 パターン（rapid_fire / self_copy_paste / coordinated_copy_paste /
+ *   url_spam / emoji_spam）それぞれが検出される
+ * - B5-fix: character_repeat は Stage 1.5 から撤去（gray→Stage 2 委譲）
+ * - B5-fix: 短文（≤6 コードポイント）は rapid_fire / coordinated の対象外
+ *   （定番リアクション「ざわざわ」「うおお」「草」「888」保護）。
+ *   self_copy_paste / url_spam / emoji_spam は短文でも維持
  * - 正当なコメントを誤検出しない（false-positive 抑制）
  * - 評価順の優先度（連投が自己コピペより先に判定される 等）
- * - サロゲートペア（絵文字）の文字連打判定が正しく動く
  */
 
 import { describe, it, expect } from 'vitest';
@@ -67,15 +70,14 @@ describe('detectSpam', () => {
 
     it('感想を2回投稿しても、間が10秒超なら none', () => {
       const r = detectSpam(
-        msg('かわいい', NOW),
-        userHist([{ text: 'よかった', timestamp: NOW - 60_000 }]),
+        msg('面白かったです', NOW),
+        userHist([{ text: 'よかったです', timestamp: NOW - 60_000 }]),
         emptyChat,
       );
       expect(r).toEqual({ type: 'none' });
     });
 
-    it('「888」は character_repeat（10未満）にならず none', () => {
-      // 888 のような短い祝意表現を誤検出しないこと
+    it('「888」は短文なので連投/横断に巻き込まれず none', () => {
       const r = detectSpam(msg('888'), emptyUser, emptyChat);
       expect(r).toEqual({ type: 'none' });
     });
@@ -117,29 +119,97 @@ describe('detectSpam', () => {
       expect(r).toEqual({ type: 'none' });
     });
 
-    it('別ユーザー2人が同一文言を投稿しても、しきい値3に満たないので none', () => {
-      const r = detectSpam(
-        msg('応援してます'),
-        emptyUser,
-        chatHist([
-          { text: '応援してます', channelId: 'UC_bob', timestamp: NOW - 1000 },
-          { text: '応援してます', channelId: 'UC_carol', timestamp: NOW - 500 },
-        ]),
-      );
-      expect(r).toEqual({ type: 'none' });
-    });
-
     it('空文字列は none', () => {
       const r = detectSpam(msg(''), emptyUser, emptyChat);
       expect(r).toEqual({ type: 'none' });
     });
   });
 
+  // ─── B5-fix: 短文リアクション保護 ───────────────────────────────
+  describe('短文リアクション保護（B5-fix）', () => {
+    it('「ざわざわ」を連投しても rapid_fire にならない（短文除外）', () => {
+      const r = detectSpam(
+        msg('ざわざわ', NOW),
+        userHist([
+          { text: 'うおお', timestamp: NOW - 6000 },
+          { text: 'すごい', timestamp: NOW - 3000 },
+        ]),
+        emptyChat,
+      );
+      expect(r).toEqual({ type: 'none' });
+    });
+
+    it('「草」を別アカ3人が同時刻に流しても coordinated にならない（短文除外）', () => {
+      const r = detectSpam(
+        msg('草', NOW),
+        emptyUser,
+        chatHist([
+          { text: '草', channelId: 'UC_b', timestamp: NOW - 3000 },
+          { text: '草', channelId: 'UC_c', timestamp: NOW - 2000 },
+          { text: '草', channelId: 'UC_d', timestamp: NOW - 1000 },
+        ]),
+      );
+      expect(r).toEqual({ type: 'none' });
+    });
+
+    it('「888」連投も rapid_fire にならない（短文除外）', () => {
+      const r = detectSpam(
+        msg('888', NOW),
+        userHist([
+          { text: '88', timestamp: NOW - 5000 },
+          { text: '8888', timestamp: NOW - 2000 },
+        ]),
+        emptyChat,
+      );
+      expect(r).toEqual({ type: 'none' });
+    });
+
+    it('短文でも self_copy_paste は維持（同一ユーザーの同一短文再投稿）', () => {
+      const r = detectSpam(
+        msg('宣伝', NOW),
+        userHist([{ text: '宣伝', timestamp: NOW - 30_000 }]),
+        emptyChat,
+      );
+      expect(r).toEqual({ type: 'self_copy_paste', confidence: 0.95 });
+    });
+
+    it('境界: 7 コードポイントは短文でない → rapid_fire 発火', () => {
+      // SHORT_TEXT_MAX_CODEPOINTS=6 なので 7 文字は対象
+      const r = detectSpam(
+        msg('あいうえおかき', NOW), // 7 codepoints
+        userHist([
+          { text: '別1', timestamp: NOW - 6000 },
+          { text: '別2', timestamp: NOW - 3000 },
+        ]),
+        emptyChat,
+      );
+      expect(r).toEqual({ type: 'rapid_fire', confidence: 0.9 });
+    });
+  });
+
+  // ─── B5-fix: character_repeat 撤去（Stage 2 委譲）───────────────
+  describe('character_repeat 撤去（B5-fix）', () => {
+    it('「あ」×15 は spam にならず none（Stage 2 LLM へ委譲）', () => {
+      const r = detectSpam(msg('あ'.repeat(15)), emptyUser, emptyChat);
+      expect(r).toEqual({ type: 'none' });
+    });
+
+    it('「うおおおお」（叫び）は none', () => {
+      const r = detectSpam(msg('うおおおお'), emptyUser, emptyChat);
+      expect(r).toEqual({ type: 'none' });
+    });
+
+    it('絵文字連打（😊×10、旧 character_repeat）も none（emoji_spam 長未満）', () => {
+      const r = detectSpam(msg('😊'.repeat(10)), emptyUser, emptyChat);
+      expect(r).toEqual({ type: 'none' });
+    });
+  });
+
   // ─── rapid_fire: 連投 ───────────────────────────────────────
   describe('rapid_fire', () => {
-    it('10秒以内に他の発言が2件あれば rapid_fire', () => {
+    it('10秒以内に他の発言が2件あれば rapid_fire（長文）', () => {
       const r = detectSpam(
-        msg('3つめの発言', NOW),
+        msg('これは3つめの発言です', NOW),
         userHist([
           { text: '1つめ', timestamp: NOW - 8000 },
           { text: '2つめ', timestamp: NOW - 4000 },
@@ -151,7 +221,7 @@ describe('detectSpam', () => {
 
     it('10秒以内3件あれば rapid_fire', () => {
       const r = detectSpam(
-        msg('4つめの発言', NOW),
+        msg('これは4つめの発言です', NOW),
         userHist([
           { text: '1つめ', timestamp: NOW - 9000 },
           { text: '2つめ', timestamp: NOW - 6000 },
@@ -164,7 +234,7 @@ describe('detectSpam', () => {
 
     it('1件だけなら rapid_fire にならない', () => {
       const r = detectSpam(
-        msg('2つめの発言', NOW),
+        msg('これは2つめの発言です', NOW),
         userHist([{ text: '1つめ', timestamp: NOW - 3000 }]),
         emptyChat,
       );
@@ -173,7 +243,7 @@ describe('detectSpam', () => {
 
     it('10秒超の発言は rapid_fire のカウントに入らない', () => {
       const r = detectSpam(
-        msg('現在の発言', NOW),
+        msg('これは現在の発言です', NOW),
         userHist([
           { text: '昔の発言1', timestamp: NOW - 20_000 },
           { text: '昔の発言2', timestamp: NOW - 15_000 },
@@ -225,13 +295,13 @@ describe('detectSpam', () => {
   // ─── 優先順位検証 ──────────────────────────────────────────
   describe('優先順位', () => {
     it('連投条件 + 自己コピペ条件を同時に満たすと rapid_fire が優先', () => {
-      // 10秒以内に他の発言が2件 + 過去に同一文言あり → rapid_fire が先に判定
+      // 長文（>6）。10秒以内に他の発言が2件 + 過去に同一文言あり → rapid_fire 優先
       const r = detectSpam(
-        msg('スパム', NOW),
+        msg('これはスパムです', NOW),
         userHist([
-          { text: '別1', timestamp: NOW - 5000 },
-          { text: '別2', timestamp: NOW - 3000 },
-          { text: 'スパム', timestamp: NOW - 60_000 }, // 自己コピペ材料
+          { text: '別の発言1', timestamp: NOW - 5000 },
+          { text: '別の発言2', timestamp: NOW - 3000 },
+          { text: 'これはスパムです', timestamp: NOW - 60_000 }, // 自己コピペ材料
         ]),
         emptyChat,
       );
@@ -241,14 +311,14 @@ describe('detectSpam', () => {
 
   // ─── coordinated_copy_paste: 横断コピペ ─────────────────────
   describe('coordinated_copy_paste', () => {
-    it('別アカウント3人が同一文言なら coordinated_copy_paste', () => {
+    it('別アカウント3人が同一文言（長文）なら coordinated_copy_paste', () => {
       const r = detectSpam(
-        msg('お祭り騒ぎ！', NOW),
+        msg('お祭り騒ぎだワッショイ', NOW),
         emptyUser,
         chatHist([
-          { text: 'お祭り騒ぎ！', channelId: 'UC_bob', timestamp: NOW - 3000 },
-          { text: 'お祭り騒ぎ！', channelId: 'UC_carol', timestamp: NOW - 2000 },
-          { text: 'お祭り騒ぎ！', channelId: 'UC_dave', timestamp: NOW - 1000 },
+          { text: 'お祭り騒ぎだワッショイ', channelId: 'UC_bob', timestamp: NOW - 3000 },
+          { text: 'お祭り騒ぎだワッショイ', channelId: 'UC_carol', timestamp: NOW - 2000 },
+          { text: 'お祭り騒ぎだワッショイ', channelId: 'UC_dave', timestamp: NOW - 1000 },
         ]),
       );
       expect(r).toEqual({ type: 'coordinated_copy_paste', confidence: 0.85 });
@@ -256,26 +326,26 @@ describe('detectSpam', () => {
 
     it('同一アカウントが3回投稿しても coordinated_copy_paste にはならない', () => {
       const r = detectSpam(
-        msg('もう一度', NOW),
+        msg('もう一度どうぞお願いします', NOW),
         emptyUser,
         chatHist([
-          { text: 'もう一度', channelId: 'UC_bob', timestamp: NOW - 3000 },
-          { text: 'もう一度', channelId: 'UC_bob', timestamp: NOW - 2000 },
-          { text: 'もう一度', channelId: 'UC_bob', timestamp: NOW - 1000 },
+          { text: 'もう一度どうぞお願いします', channelId: 'UC_bob', timestamp: NOW - 3000 },
+          { text: 'もう一度どうぞお願いします', channelId: 'UC_bob', timestamp: NOW - 2000 },
+          { text: 'もう一度どうぞお願いします', channelId: 'UC_bob', timestamp: NOW - 1000 },
         ]),
       );
       // 別アカウント数は 1 だけ → 3未満で発火しない
       expect(r).toEqual({ type: 'none' });
     });
 
-    it('投稿者自身のチャンネルからの発言は coordinated_copy_paste のカウントに入らない', () => {
+    it('投稿者自身のチャンネルからの発言は coordinated のカウントに入らない', () => {
       const r = detectSpam(
-        msg('応援', NOW),
+        msg('みんなで応援しています', NOW),
         emptyUser,
         chatHist([
-          { text: '応援', channelId: 'UC_alice', timestamp: NOW - 3000 },
-          { text: '応援', channelId: 'UC_bob', timestamp: NOW - 2000 },
-          { text: '応援', channelId: 'UC_carol', timestamp: NOW - 1000 },
+          { text: 'みんなで応援しています', channelId: 'UC_alice', timestamp: NOW - 3000 },
+          { text: 'みんなで応援しています', channelId: 'UC_bob', timestamp: NOW - 2000 },
+          { text: 'みんなで応援しています', channelId: 'UC_carol', timestamp: NOW - 1000 },
         ]),
       );
       // UC_alice は除外、別アカウントは2 → 3未満
@@ -283,42 +353,7 @@ describe('detectSpam', () => {
     });
   });
 
-  // ─── character_repeat: 文字連打 ─────────────────────────────
-  describe('character_repeat', () => {
-    it('「あ」×10 は character_repeat', () => {
-      const r = detectSpam(msg('あ'.repeat(10)), emptyUser, emptyChat);
-      expect(r).toEqual({ type: 'character_repeat', confidence: 0.95 });
-    });
-
-    it('「あ」×20 も character_repeat', () => {
-      const r = detectSpam(msg('あ'.repeat(20)), emptyUser, emptyChat);
-      expect(r.type).toBe('character_repeat');
-    });
-
-    it('「あ」×9 は character_repeat にならない（しきい値10）', () => {
-      const r = detectSpam(msg('あ'.repeat(9)), emptyUser, emptyChat);
-      expect(r).toEqual({ type: 'none' });
-    });
-
-    it('部分的に同一文字が並ぶ（「おはよう！ああああああああああ」）は対象外', () => {
-      // 全体一致パターンなので、これは character_repeat にはならない
-      const r = detectSpam(
-        msg('おはよう！あああああああああ'),
-        emptyUser,
-        emptyChat,
-      );
-      expect(r.type).toBe('none');
-    });
-
-    it('絵文字（サロゲートペア）の連打も検出する', () => {
-      // 😊 はサロゲートペア。Array.from で1コードポイントとして扱われる
-      const text = '😊'.repeat(10);
-      const r = detectSpam(msg(text), emptyUser, emptyChat);
-      expect(r.type).toBe('character_repeat');
-    });
-  });
-
-  // ─── url_spam: URL 羅列 ─────────────────────────────────────
+  // ─── url_spam: URL 羅列（短文でも維持）──────────────────────
   describe('url_spam', () => {
     it('URL が3つあれば url_spam', () => {
       const r = detectSpam(
@@ -353,22 +388,19 @@ describe('detectSpam', () => {
         emptyUser,
         emptyChat,
       );
-      // プロトコル無しの「.com」はマッチさせていない
       expect(r).toEqual({ type: 'none' });
     });
   });
 
   // ─── emoji_spam: 絵文字スパム ──────────────────────────────
   describe('emoji_spam', () => {
-    it('絵文字 25 個（長さ・比率ともに条件超え）は emoji_spam', () => {
+    it('同一絵文字 25 個（旧 character_repeat）は emoji_spam', () => {
+      // character_repeat 撤去後は emoji_spam が拾う（長さ・比率とも条件超え）
       const r = detectSpam(msg('🎉'.repeat(25)), emptyUser, emptyChat);
-      // 全部同一絵文字なので character_repeat が先に発火する
-      // → これを emoji_spam として確認するには異なる絵文字を混ぜる
-      expect(r.type).toBe('character_repeat');
+      expect(r).toEqual({ type: 'emoji_spam', confidence: 0.8 });
     });
 
     it('複数種類の絵文字を多用すると emoji_spam', () => {
-      // 5 種類 × 5 = 25 コードポイント、すべて絵文字
       const r = detectSpam(
         msg('🎉🎊🎈🎁🎂'.repeat(5)),
         emptyUser,
@@ -395,14 +427,18 @@ describe('detectSpam', () => {
 
   // ─── しきい値定数の公開 ────────────────────────────────────
   describe('SPAM_DETECTION_THRESHOLDS', () => {
-    it('しきい値が外部から参照可能', () => {
+    it('しきい値が外部から参照可能（B5-fix で CHARACTER_REPEAT 撤去 / SHORT_TEXT 追加）', () => {
       expect(SPAM_DETECTION_THRESHOLDS.RAPID_FIRE_WINDOW_MS).toBe(10_000);
       expect(SPAM_DETECTION_THRESHOLDS.RAPID_FIRE_THRESHOLD).toBe(2);
       expect(SPAM_DETECTION_THRESHOLDS.COORDINATED_THRESHOLD).toBe(3);
-      expect(SPAM_DETECTION_THRESHOLDS.CHARACTER_REPEAT_MIN_LENGTH).toBe(10);
       expect(SPAM_DETECTION_THRESHOLDS.URL_SPAM_THRESHOLD).toBe(3);
       expect(SPAM_DETECTION_THRESHOLDS.EMOJI_SPAM_RATIO).toBe(0.8);
       expect(SPAM_DETECTION_THRESHOLDS.EMOJI_SPAM_MIN_LENGTH).toBe(20);
+      expect(SPAM_DETECTION_THRESHOLDS.SHORT_TEXT_MAX_CODEPOINTS).toBe(6);
+      expect(
+        (SPAM_DETECTION_THRESHOLDS as Record<string, unknown>)
+          .CHARACTER_REPEAT_MIN_LENGTH,
+      ).toBeUndefined();
     });
   });
 });
