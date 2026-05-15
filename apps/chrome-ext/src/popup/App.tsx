@@ -95,7 +95,9 @@ function SegmentedControl({
       {options.map((opt, i) => (
         <button
           key={opt.value}
+          type="button"
           onClick={() => onChange(opt.value)}
+          aria-pressed={value === opt.value}
           className={`flex-1 py-1.5 transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500 focus:outline-none ${
             i > 0 ? 'border-l border-gray-200' : ''
           } ${
