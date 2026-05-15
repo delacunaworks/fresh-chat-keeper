@@ -937,12 +937,23 @@ function handleReport(
   };
 
   // 導出: FP（誤ブロック）= 本来 safe。FN（見逃し）= 視聴者の申告ラベル。
+  // B5 typescript hardening: FN の reportedLabel 3 状態を値で明確に区別する:
+  //   - undefined（スキップ＝種別なし報告）: correctLabel='unknown' /
+  //     failureCategory=null（「分類しない」意思表示。null で表す）
+  //   - 'unknown'（わからない・その他）: correctLabel='unknown' /
+  //     failureCategory='unknown'（分類は試みたが不明。null と区別）
+  //   - 具体ラベル: correctLabel/failureCategory ともそのラベル
   const correctLabel: import('@fresh-chat-keeper/shared').CollectionLabel | 'unknown' =
     reportKind === 'false_positive' ? 'safe' : (reportedLabel ?? 'unknown');
   const failureCategory:
     | import('@fresh-chat-keeper/shared').CollectionLabel
     | 'unknown'
-    | null = reportKind === 'false_positive' ? null : (reportedLabel ?? null);
+    | null =
+    reportKind === 'false_positive'
+      ? null
+      : reportedLabel === undefined
+        ? null // スキップ: 分類しない
+        : reportedLabel; // 'unknown'（わからない）含む具体値
 
   // emit 用 labels/primary: FP→safe、FN→申告ラベル（unknown/skip は中立 safe。
   // 訂正の本体は userFeedback.correctLabel/failureCategory + reportKind 側）

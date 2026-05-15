@@ -1,6 +1,21 @@
 import type { UserProgress, JudgmentLabel } from './chat.js';
 
 /**
+ * 視聴者が誤判定報告で選べる「本来のラベル」。
+ *
+ * - `safe` は除外する: 「本来 safe だった」= 誤ブロック(FP)であり、それは
+ *   `reportKind: 'false_positive'` で表現する。FN（見逃し）の reportedLabel に
+ *   safe は意味的にあり得ないため、型で `Exclude<JudgmentLabel, 'safe'>` する
+ * - `unknown` =「わからない・その他」（種別は付けたいが分類できない）
+ * - 「スキップ（種別なしで報告のみ）」は reportedLabel を **undefined** で表す
+ *   （`unknown` とは区別する。undefined=スキップ, 'unknown'=わからない）
+ *
+ * B5 typescript hardening: report-form.ts の独自宣言を shared に昇格し、
+ * 'safe' 混入を型で排除して chrome-ext / report UI で単一の真実にする。
+ */
+export type ReportedLabel = Exclude<JudgmentLabel, 'safe'> | 'unknown';
+
+/**
  * ユーザーが「誤判定」と報告したコメントの記録。
  * chrome.storage に最大 100 件保存し、将来的にサーバーへ送信することを想定した型定義。
  */
@@ -40,8 +55,10 @@ export interface MisreportEntry {
    */
   reportKind?: 'false_positive' | 'false_negative';
   /**
-   * 視聴者が選んだ「本来のラベル」。`unknown` =「わからない・その他」。
-   * 「スキップ（種別なしで報告のみ）」選択時は undefined。
+   * 視聴者が選んだ「本来のラベル」（{@link ReportedLabel}）。
+   * `unknown` =「わからない・その他」。「スキップ（種別なしで報告のみ）」
+   * 選択時は undefined（`unknown` と区別する）。`safe` は型で排除済み
+   * （誤ブロックは reportKind='false_positive' で表す）。
    */
-  reportedLabel?: JudgmentLabel | 'unknown';
+  reportedLabel?: ReportedLabel;
 }

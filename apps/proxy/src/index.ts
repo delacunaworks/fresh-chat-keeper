@@ -278,6 +278,9 @@ function normalizeRequest(body: Record<string, unknown>): NormalizedRequest {
   };
 }
 
+// B5 typescript hardening: default 節を持たない網羅 switch に統一
+// （chrome-ext filter-orchestrator.ts の legacyFilterModeToStrength と同スタイル。
+//  ラベル/モード追加時に TS の網羅チェックで取りこぼしを検出させる）。
 function legacyModeToStrength(mode: LegacyFilterMode): 'loose' | 'standard' | 'strict' {
   switch (mode) {
     case 'lenient':
@@ -286,7 +289,6 @@ function legacyModeToStrength(mode: LegacyFilterMode): 'loose' | 'standard' | 's
       return 'strict';
     case 'standard':
     case 'off':
-    default:
       return 'standard';
   }
 }
@@ -298,7 +300,6 @@ function strengthToLegacyMode(strength: 'loose' | 'standard' | 'strict'): Legacy
     case 'strict':
       return 'strict';
     case 'standard':
-    default:
       return 'standard';
   }
 }

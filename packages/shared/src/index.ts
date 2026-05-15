@@ -23,7 +23,7 @@ export type {
   Result,
 } from "./types/api.js";
 
-export type { MisreportEntry } from "./types/misreport.js";
+export type { MisreportEntry, ReportedLabel } from "./types/misreport.js";
 
 export type {
   CollectionLabel,

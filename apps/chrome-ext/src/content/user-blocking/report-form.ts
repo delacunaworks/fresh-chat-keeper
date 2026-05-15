@@ -16,18 +16,14 @@
  */
 
 import { announce } from './live-region.js';
+import type { ReportedLabel } from '@fresh-chat-keeper/shared';
 
 /** フィルタ済み→FP / 表示中→FN（呼び出し側が表示状態から自動判定） */
 export type ReportKind = 'false_positive' | 'false_negative';
 
-/** ユーザーが選んだ「本来のラベル」。スキップ時は undefined。 */
-export type ReportedLabel =
-  | 'spoiler'
-  | 'harassment'
-  | 'spam'
-  | 'off_topic'
-  | 'backseat'
-  | 'unknown';
+// B5 typescript hardening: ReportedLabel は shared に昇格（'safe' を型排除）。
+// 呼び出し側（archive.ts）の import 経路を変えないよう re-export する。
+export type { ReportedLabel } from '@fresh-chat-keeper/shared';
 
 interface RadioOption {
   /** ReportedLabel か、スキップ（種別なし報告）を表す特別値 */
