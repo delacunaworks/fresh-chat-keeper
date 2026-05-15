@@ -30,6 +30,7 @@ import { CollectionConsentModal } from './CollectionConsentModal.js';
 import { CollectionRevokeConfirmModal } from './CollectionRevokeConfirmModal.js';
 import { CategoryFilters } from './tabs/CategoryFilters.js';
 import { UserBlocklist } from './tabs/UserBlocklist.js';
+import { FirstTimeV3Notice } from './FirstTimeV3Notice.js';
 import type { CategorySettings } from '../shared/settings.js';
 import type { KBGame } from '@fresh-chat-keeper/knowledge-base';
 import { getAllGenreTemplates } from '@fresh-chat-keeper/knowledge-base';
@@ -667,6 +668,8 @@ export default function App() {
           <span className="text-xs text-indigo-200">{settings.enabled ? 'ON' : 'OFF'}</span>
         </div>
       </div>
+
+      <FirstTimeV3Notice onGoToCategory={() => setActiveTab('category')} />
 
       <TabBar active={activeTab} onChange={setActiveTab} />
 
