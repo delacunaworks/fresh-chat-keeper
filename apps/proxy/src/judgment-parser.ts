@@ -25,7 +25,7 @@
  */
 
 import type { JudgmentLabel } from '@fresh-chat-keeper/shared';
-import { derivePrimary } from '@fresh-chat-keeper/judgment-engine';
+import { derivePrimary, LABEL_PRECEDENCE } from '@fresh-chat-keeper/judgment-engine';
 
 /**
  * パースされた1メッセージ分の判定結果。
@@ -53,14 +53,13 @@ interface RawJudgmentEntry {
   reason_ja?: unknown;
 }
 
-const VALID_LABELS: readonly JudgmentLabel[] = [
-  'safe',
-  'spoiler',
-  'harassment',
-  'spam',
-  'off_topic',
-  'backseat',
-] as const;
+/**
+ * 妥当なラベル集合。{@link LABEL_PRECEDENCE}（judgment-engine の単一の真実）を
+ * そのまま流用する。`includes` での membership 判定にしか使わないので順序は不問。
+ * 別配列で二重管理すると LABEL_PRECEDENCE 追加時に typo・追記漏れが起きるため、
+ * 導出に統一する。
+ */
+const VALID_LABELS: readonly JudgmentLabel[] = LABEL_PRECEDENCE;
 
 /** 安全側に倒す fallback（LLM 全体失敗時 / 個別エントリ失敗時に使用） */
 function safeFallback(messageId: string): ParsedJudgment {

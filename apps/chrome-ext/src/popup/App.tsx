@@ -555,7 +555,7 @@ export default function App() {
   const update = (partial: Partial<Settings>) => {
     const next = { ...settings, ...partial };
     setSettings(next);
-    // saveSettings が version: 2 を確実に付与する（直接 set すると剥がれる）
+    // saveSettings が最新世代 version (v3) を確実に付与する（直接 set すると剥がれる）
     void saveSettings(next);
   };
 

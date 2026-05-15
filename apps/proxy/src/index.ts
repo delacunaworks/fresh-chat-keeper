@@ -210,13 +210,18 @@ function isNewFormat(body: Record<string, unknown>): boolean {
 /**
  * 新形式リクエストの `context.settings` を実行時検証する。
  *
- * 必須フィールドのみを最低限ガード:
- * - `version: number`（v2 マイグレーション後は 2）
+ * **命名について（B3 hardening）**: 関数名は `isValidV2Settings` だが、
+ * Phase 3（v0.4.0）以降の **v3 リクエストも受け付ける**。検証しているのは
+ * v2/v3 共通の必須フィールドのみ:
+ * - `version: number`（v2 = 2 / v3 = 3。値の厳密一致はチェックしない）
  * - `enabled: boolean`
  * - `categories.spoiler.{enabled: boolean, strength: 'loose'|'standard'|'strict'}`
  *
- * 軽量化のため zod 等の追加依存は使わず手書きガード。検証範囲を広げたくなったら
- * shared の {@link import('@fresh-chat-keeper/shared').migrateSettings} に
+ * v3 で追加された harassment/spam/offTopic/backseat/userBlocks は optional
+ * 扱いのため、ここでは検証しない（proxy は spoiler 強度しか参照しない）。
+ * 関数名のリネームは __test__ 経由のテスト API を壊すため見送り、コメントで
+ * 実態を明示する方針。検証範囲を広げたくなったら shared の
+ * {@link import('@fresh-chat-keeper/shared').migrateSettings} に
  * フォールバックさせる方向で再設計する。
  */
 function isValidV2Settings(settings: unknown): boolean {
@@ -421,6 +426,23 @@ async function judgeBatch(
         verdict,
         labels: p.labels,
         primary: p.primary,
+        // ── 後方互換ブリッジ（B3 hardening / B2 typescript-reviewer 対応）──
+        // chrome-ext v0.3.5 は応答の `spoilerCategory` を見て verdict を再計算する
+        // （filter-orchestrator → chrome-cache の verdictFromCache）。B2 で
+        // spoilerCategory を廃止したまま proxy を単独デプロイすると、v0.3.5 の
+        // 全 lenient 以外ユーザーが Stage 2 通過コメントを全件 block してしまう。
+        // chrome-ext v0.4.0（B3 で labels/primary 消費に移行）が Web Store で
+        // 行き渡るまでの保険として、primary から最小限の spoilerCategory を導出する。
+        // direct/foreshadowing/gameplay の区別は失われるが、v0.3.5 の
+        // verdictFromCache は direct_spoiler=block / safe=allow を正しく扱える。
+        // @todo chrome-ext v0.4.0 が Web Store 配布で十分に行き渡ったら削除可
+        //   （旧版ユーザーがほぼ居なくなった時点。proxy 単独デプロイ前提を解除）
+        spoilerCategory:
+          p.primary === 'spoiler'
+            ? ('direct_spoiler' as const)
+            : p.primary === 'safe'
+              ? ('safe' as const)
+              : undefined,
         confidence: p.confidence,
         stage: 2,
         ...(p.reasonJa ? { reason: p.reasonJa } : {}),

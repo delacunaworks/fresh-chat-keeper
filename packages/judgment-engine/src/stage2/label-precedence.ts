@@ -24,15 +24,35 @@ import type { JudgmentLabel } from '../types.js';
  *
  * 例: labels が `['backseat', 'harassment']` のとき → primary は `'harassment'`
  *     （`'harassment'` の方が配列内で先に出現するため）
+ *
+ * `as const satisfies readonly JudgmentLabel[]`:
+ * - `as const` で要素をリテラル型に固定（後述の網羅チェックを効かせるため）
+ * - `satisfies` で「JudgmentLabel 以外の値を入れたら型エラー」を保証
  */
-export const LABEL_PRECEDENCE: readonly JudgmentLabel[] = [
+export const LABEL_PRECEDENCE = [
   'harassment',
   'spoiler',
   'backseat',
   'spam',
   'off_topic',
   'safe',
-] as const;
+] as const satisfies readonly JudgmentLabel[];
+
+/**
+ * コンパイル時の網羅チェック。
+ *
+ * `JudgmentLabel` に新しいラベルを追加したのに {@link LABEL_PRECEDENCE} へ
+ * 追記し忘れると、ここで型エラーになる（`Exclude` が `never` にならない）。
+ * 逆に LABEL_PRECEDENCE 側に余分な値があれば `satisfies` 側で検出される。
+ *
+ * 値としては使わない（型レベルの assert のみ）。
+ */
+type _LabelPrecedenceExhaustive =
+  Exclude<JudgmentLabel, (typeof LABEL_PRECEDENCE)[number]> extends never
+    ? true
+    : ['LABEL_PRECEDENCE is missing labels:', Exclude<JudgmentLabel, (typeof LABEL_PRECEDENCE)[number]>];
+const _labelPrecedenceExhaustive: _LabelPrecedenceExhaustive = true;
+void _labelPrecedenceExhaustive;
 
 /**
  * LABEL_PRECEDENCE に基づいて labels[] から primary を導出する。

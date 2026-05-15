@@ -334,15 +334,13 @@ describe('parseMultiLabelResponse (full pipeline)', () => {
 
 describe('内部ヘルパー (__test__)', () => {
   describe('VALID_LABELS', () => {
-    it('JudgmentLabel の 6 値と一致', () => {
-      expect(VALID_LABELS).toEqual([
-        'safe',
-        'spoiler',
-        'harassment',
-        'spam',
-        'off_topic',
-        'backseat',
-      ]);
+    it('JudgmentLabel の 6 値と集合一致（順序は LABEL_PRECEDENCE 由来なので不問）', () => {
+      // B3 hardening: VALID_LABELS は LABEL_PRECEDENCE から導出されるため
+      // 配列順は深刻度順（harassment 先頭）。membership 判定にしか使わないので
+      // 集合として 6 値を過不足なく含むことだけ検証する。
+      expect([...VALID_LABELS].sort()).toEqual(
+        ['backseat', 'harassment', 'off_topic', 'safe', 'spam', 'spoiler'],
+      );
     });
   });
 
