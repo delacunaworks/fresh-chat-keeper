@@ -166,10 +166,13 @@ describe('detectSpam', () => {
       expect(r).toEqual({ type: 'none' });
     });
 
-    it('短文でも self_copy_paste は維持（同一ユーザーの同一短文再投稿）', () => {
+    it('短文でも self_copy_paste は維持（同一短文 連続 3 回）', () => {
       const r = detectSpam(
         msg('宣伝', NOW),
-        userHist([{ text: '宣伝', timestamp: NOW - 30_000 }]),
+        userHist([
+          { text: '宣伝', timestamp: NOW - 60_000 },
+          { text: '宣伝', timestamp: NOW - 30_000 },
+        ]),
         emptyChat,
       );
       expect(r).toEqual({ type: 'self_copy_paste', confidence: 0.95 });
@@ -256,27 +259,37 @@ describe('detectSpam', () => {
     });
   });
 
-  // ─── self_copy_paste: 自己コピペ ────────────────────────────
-  describe('self_copy_paste', () => {
-    it('同一ユーザーが過去に同じ文言を投稿していたら self_copy_paste', () => {
+  // ─── self_copy_paste: 連続自己コピペ（B6b: 連続 3 回以上）─────
+  describe('self_copy_paste（連続 3 回以上、B6b）', () => {
+    it('連続 2 回（履歴に同一 1 件）は通る＝none', () => {
+      // 「あじまるあじまる」コールで "あじまる" を誤送信→再送信した
+      // 連続 2 回ケースを誤検出しないこと
+      const r = detectSpam(
+        msg('あじまる', NOW),
+        userHist([{ text: 'あじまる', timestamp: NOW - 5000 }]),
+        emptyChat,
+      );
+      expect(r).toEqual({ type: 'none' });
+    });
+
+    it('連続 3 回（履歴に同一が連続 2 件）はブロック', () => {
       const r = detectSpam(
         msg('チャンネル登録お願いします', NOW),
         userHist([
-          {
-            text: 'チャンネル登録お願いします',
-            timestamp: NOW - 60_000,
-          },
+          { text: 'チャンネル登録お願いします', timestamp: NOW - 60_000 },
+          { text: 'チャンネル登録お願いします', timestamp: NOW - 30_000 },
         ]),
         emptyChat,
       );
       expect(r).toEqual({ type: 'self_copy_paste', confidence: 0.95 });
     });
 
-    it('複数回投稿していたら self_copy_paste', () => {
+    it('連続 4 回以上もブロック', () => {
       const r = detectSpam(
         msg('宣伝です', NOW),
         userHist([
           { text: '宣伝です', timestamp: NOW - 100_000 },
+          { text: '宣伝です', timestamp: NOW - 80_000 },
           { text: '宣伝です', timestamp: NOW - 50_000 },
         ]),
         emptyChat,
@@ -284,10 +297,53 @@ describe('detectSpam', () => {
       expect(r.type).toBe('self_copy_paste');
     });
 
+    it('「同一 2 → 別 → 同一 2」は連続が途切れているので通る＝none', () => {
+      // 履歴 [A,A,B,A] + 今回 A → 末尾から A(1), B で連続終了 → 連続 1 < 2
+      const r = detectSpam(
+        msg('A', NOW),
+        userHist([
+          { text: 'A', timestamp: NOW - 50_000 },
+          { text: 'A', timestamp: NOW - 40_000 },
+          { text: 'B', timestamp: NOW - 30_000 },
+          { text: 'A', timestamp: NOW - 10_000 },
+        ]),
+        emptyChat,
+      );
+      expect(r).toEqual({ type: 'none' });
+    });
+
+    it('非連続で計 3 回（[A,B,A]+A）も連続でないので通る＝none', () => {
+      const r = detectSpam(
+        msg('A', NOW),
+        userHist([
+          { text: 'A', timestamp: NOW - 50_000 },
+          { text: 'B', timestamp: NOW - 30_000 },
+          { text: 'A', timestamp: NOW - 10_000 },
+        ]),
+        emptyChat,
+      );
+      expect(r).toEqual({ type: 'none' });
+    });
+
+    it('時間差が大きくても連続 3 回ならブロック（時間は不問）', () => {
+      const r = detectSpam(
+        msg('同じ宣伝文', NOW),
+        userHist([
+          { text: '同じ宣伝文', timestamp: NOW - 250_000 },
+          { text: '同じ宣伝文', timestamp: NOW - 120_000 },
+        ]),
+        emptyChat,
+      );
+      expect(r).toEqual({ type: 'self_copy_paste', confidence: 0.95 });
+    });
+
     it('text が完全一致でないと self_copy_paste にはならない', () => {
       const r = detectSpam(
         msg('応援してます！', NOW),
-        userHist([{ text: '応援してます', timestamp: NOW - 60_000 }]),
+        userHist([
+          { text: '応援してます', timestamp: NOW - 60_000 },
+          { text: '応援してます', timestamp: NOW - 30_000 },
+        ]),
         emptyChat,
       );
       expect(r).toEqual({ type: 'none' });
@@ -340,10 +396,13 @@ describe('detectSpam', () => {
       expect(greeting).toEqual({ type: 'none' });
     });
 
-    it('coordinated 撤去後も同一ユーザー起因の self_copy_paste は検出（横断履歴があっても）', () => {
+    it('coordinated 撤去後も同一ユーザーの連続 3 回 self_copy_paste は検出（横断履歴があっても）', () => {
       const r = detectSpam(
         msg('チャンネル登録よろしく', NOW),
-        userHist([{ text: 'チャンネル登録よろしく', timestamp: NOW - 30_000 }]),
+        userHist([
+          { text: 'チャンネル登録よろしく', timestamp: NOW - 60_000 },
+          { text: 'チャンネル登録よろしく', timestamp: NOW - 30_000 },
+        ]),
         chatHist([
           { text: 'チャンネル登録よろしく', channelId: 'UC_x', timestamp: NOW - 3000 },
           { text: 'チャンネル登録よろしく', channelId: 'UC_y', timestamp: NOW - 2000 },

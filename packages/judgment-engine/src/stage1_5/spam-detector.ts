@@ -4,8 +4,8 @@
  * 検出パターン（評価順、最初にマッチしたものを返す）:
  *   1. rapid_fire           — 同一ユーザーによる連投（10秒以内に他の発言が2件以上）
  *                             ※ 短文（≤ SHORT_TEXT_MAX_CODEPOINTS）は対象外
- *   2. self_copy_paste      — 同一ユーザーが過去に投稿した内容を再投稿（自己コピペ）
- *                             ※ 短文でも維持（短い宣伝コピペ等はあり得る）
+ *   2. self_copy_paste      — 同一ユーザーが**連続**で同一文言（連続 3 回以上）
+ *                             ※ 非連続（間に別文言）は連続リセット。短文でも維持
  *   3. url_spam             — URL が3件以上含まれる（短文でも維持）
  *   4. emoji_spam           — Unicode 絵文字が大半（80%超）かつ長さ20コードポイント超
  *
@@ -101,12 +101,22 @@ export function detectSpam(
     }
   }
 
-  // 2. 自己コピペ: 同一ユーザーが過去に全く同じ文言を投稿していた
-  //    （短文でも維持。短い宣伝コピペの連投はあり得る）
-  const identicalByUser = userHistory.messages.filter(
-    (m) => m.text === message.text,
-  );
-  if (identicalByUser.length >= 1) {
+  // 2. 自己コピペ: 同一ユーザーが**連続**で同一文言を投稿（連続 3 回以上）。
+  //    B6b: 旧実装は履歴全体に同一文言 1 件で 2 回目発火（非連続でも発火）し、
+  //    「あじまるあじまる」コール時の "あじまる" 誤送信→再送信（連続 2 回）を
+  //    誤検出していた。最新から遡り message.text と一致し続ける件数を数え、
+  //    別文言が出たら連続終了（break）。連続一致が 2 件以上＝今回投稿を入れて
+  //    連続 3 回以上でのみ発火（時間差は不問。間に別文言が挟まれば連続リセット）。
+  //    userHistory.messages は古い順（末尾が最新、message 自身は未追加）。
+  let consecutiveSame = 0;
+  for (let i = userHistory.messages.length - 1; i >= 0; i--) {
+    if (userHistory.messages[i].text === message.text) {
+      consecutiveSame++;
+    } else {
+      break;
+    }
+  }
+  if (consecutiveSame >= 2) {
     return { type: 'self_copy_paste', confidence: 0.95 };
   }
 

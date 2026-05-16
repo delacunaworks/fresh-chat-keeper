@@ -141,26 +141,29 @@ describe('runStage1_5', () => {
   });
 
   describe('履歴の積むタイミング', () => {
-    it('自己コピペ検出のため、判定対象は判定後に積まれる', () => {
-      // 同一文言を別タイムスタンプで2回流す
-      const t1 = BASE_TS - 10_000;
-      const t2 = BASE_TS;
+    it('自己コピペ検出のため、判定対象は判定後に積まれる（B6b: 連続 3 回で発火）', () => {
+      // 同一文言を 3 回連続。1・2 件目は連続 3 未満で gray、3 件目で発火。
+      // 判定が「履歴追加前」に行われる不変条件を担保する。
       const r1 = runStage1_5(
-        buildMessage('宣伝です', { text: '宣伝です', timestamp: t1 }),
+        buildMessage('宣伝です', { text: '宣伝です', timestamp: BASE_TS - 20_000 }),
         buildContext(true),
         store,
       );
-      // 1件目は履歴空なので gray
-      expect(r1.outcome).toBe('gray');
-      // 2件目は履歴に1件目あり → self_copy_paste 発火
+      expect(r1.outcome).toBe('gray'); // 履歴空 → 連続 0
       const r2 = runStage1_5(
-        buildMessage('宣伝です', { text: '宣伝です', timestamp: t2 }),
+        buildMessage('宣伝です', { text: '宣伝です', timestamp: BASE_TS - 10_000 }),
         buildContext(true),
         store,
       );
-      expect(r2.outcome).toBe('filter');
-      if (r2.outcome === 'filter') {
-        expect(r2.reason).toBe('self_copy_paste');
+      expect(r2.outcome).toBe('gray'); // 連続 1（履歴 1 件）→ 2 未満
+      const r3 = runStage1_5(
+        buildMessage('宣伝です', { text: '宣伝です', timestamp: BASE_TS }),
+        buildContext(true),
+        store,
+      );
+      expect(r3.outcome).toBe('filter'); // 連続 2（履歴 2 件連続）→ 発火
+      if (r3.outcome === 'filter') {
+        expect(r3.reason).toBe('self_copy_paste');
       }
     });
   });
@@ -208,15 +211,21 @@ describe('runStage1_5', () => {
       expect(r).toEqual({ outcome: 'gray', reason: 'needs_stage2' });
     });
 
-    it('同一ユーザーの自己コピペは横断履歴があっても引き続き filter', () => {
+    it('同一ユーザーの連続 3 回 self_copy_paste は横断履歴があっても filter', () => {
       const COPY = 'チャンネル登録お願いします';
-      // alice 自身が過去に同一文言（self_copy_paste の材料）
+      // alice 自身が連続 2 回（self_copy_paste の連続材料）
       runStage1_5(
         buildMessage(COPY, { text: COPY, timestamp: BASE_TS - 60_000 }),
         buildContext(true),
         store,
       );
-      // 別ユーザーも同一文言（旧 coordinated 材料、撤去後は影響しない）
+      runStage1_5(
+        buildMessage(COPY, { text: COPY, timestamp: BASE_TS - 30_000 }),
+        buildContext(true),
+        store,
+      );
+      // 別ユーザーも同一文言（旧 coordinated 材料、撤去後は影響しない。
+      // alice の連続カウントは別 channelId なので途切れない）
       runStage1_5(
         buildMessage(COPY, {
           text: COPY,
