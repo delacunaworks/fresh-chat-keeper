@@ -1,7 +1,7 @@
 # プライバシーポリシー / Privacy Policy
 
 **Fresh Chat Keeper Chrome Extension**
-最終更新 / Last updated: 2026-05-10
+最終更新 / Last updated: 2026-05-15
 
 ---
 
@@ -22,7 +22,8 @@ Fresh Chat Keeper は個人を特定できる情報を一切収集しません�
 | カスタム NG ワード | ユーザーが設定したフィルタキーワードの保存 |
 | Stage 2 判定キャッシュ（テキストのハッシュ → 判定結果） | 同一コメントへの重複リクエスト防止 |
 | 匿名トークン（UUID） | レート制限のためにプロキシへ送信（ユーザーとは紐付かない） |
-| 誤判定レポート（最大 100 件） | 将来のモデル改善のため端末内に蓄積（現時点で外部送信はしない） |
+| ユーザーブロックリスト（YouTube チャンネルID / ハンドル名・ブロック時点の表示名・ブロック日時） | ブロックしたユーザーのコメント非表示（端末内のみ。外部送信なし） |
+| 誤判定レポート（最大 100 件。報告種別 FP/FN・選択カテゴリを含む） | モデル改善のため端末内に蓄積。opt-in 同意中のみ後述の収集 API にも並行送信 |
 | 月間利用カウント | 月間上限の管理 |
 
 ### Anthropic API へのデータ送信
@@ -30,10 +31,25 @@ Fresh Chat Keeper は個人を特定できる情報を一切収集しません�
 ネタバレ判定（Stage 2）を行う際に、YouTube チャットのコメントテキストを Anthropic の Claude API に送信します。
 
 - 送信するデータはコメントテキストと動画タイトルのみです。ユーザー名・アカウント情報・視聴履歴は送信しません。
+- v0.4.0 以降、ネタバレに加え **暴言・誹謗中傷 / スパム・連投 / 無関係な話題・他配信者言及 / 指示厨・攻略押し付け** のマルチラベル判定を行いますが、送信するデータは同じくコメントテキストと動画タイトルのみで、判定結果はブラウザ内にのみキャッシュされます。
 - 動画タイトルは、プレイ中のゲームを推測してネタバレ判定の精度を向上させるために使用します。
 - API リクエストは Fresh Chat Keeper が管理する軽量プロキシ経由で行われます。
 - **プロキシはチャットメッセージおよび動画タイトルをログ保存しません。** 判定処理後に破棄されます。
 - Anthropic のデータ取り扱いについては [Anthropic Privacy Policy](https://www.anthropic.com/privacy) を参照してください。
+
+### ブロック機能・誤判定報告について（v0.4.0 以降）
+
+**ブロック機能**
+
+特定のユーザーのコメントを非表示にする「ブロック機能」を提供しています。ブロック対象の YouTube チャンネルID（または 2026-05 以降の YouTube 仕様変更によりハンドル名）・ブロック時点の表示名・ブロック日時が `chrome.storage.local` にのみ保存されます。
+
+- ブロック情報は外部サーバーに送信されません。
+- いつでもブロック解除・全削除が可能です（ポップアップの「ブロックリスト」タブ）。
+- ブロックされたユーザーには通知されません（シャドウミュート）。
+
+**誤判定報告（フィルタ済み＝False Positive / 見逃し＝False Negative）**
+
+コメントのフィルタが誤っていた場合に、種別（誤フィルタ / 見逃し）と本来のカテゴリ（ネタバレ・暴言・スパム・無関係・指示厨・わからない・スキップ）を選んで報告できます。報告は端末内（最大 100 件）に蓄積されます。**opt-in 同意中の場合のみ**、後述の収集 API にも並行送信されます（同意していない場合は端末内のみ）。報告に含まれるのは対象コメント本文・選択カテゴリ・報告種別で、報告者ご自身の情報は含まれません。
 
 ### opt-in 同意に基づくデータ収集（v0.3.5 以降）
 
@@ -116,7 +132,8 @@ The following information is stored only in your browser's `chrome.storage.local
 | Custom block words | Storing user-defined filter keywords |
 | Stage 2 judgment cache (text hash → verdict) | Avoiding duplicate requests for the same comment |
 | Anonymous token (UUID) | Sent to the proxy for rate-limiting purposes only; not linked to any user identity |
-| False-positive reports (up to 100 entries) | Stored locally for future model improvement; not transmitted externally at this time |
+| User block list (YouTube channel ID / handle, display name at block time, block timestamp) | Hiding comments from blocked users (local only; never transmitted) |
+| Misjudgment reports (up to 100 entries; includes report kind FP/FN and selected category) | Stored locally for model improvement; also sent in parallel to the collection API only while opt-in consent is active |
 | Monthly usage count | Managing the monthly usage limit |
 
 ### Data Sent to Anthropic API
@@ -124,10 +141,25 @@ The following information is stored only in your browser's `chrome.storage.local
 When performing spoiler detection (Stage 2), Fresh Chat Keeper sends YouTube chat comment text to the Anthropic Claude API.
 
 - Only comment text and the video title are sent. Usernames, account information, and viewing history are never sent.
+- Since v0.4.0, in addition to spoilers, multi-label classification is performed for **harassment, spam/flooding, off-topic / other-streamer mentions, and backseat gaming**. The data sent is still only comment text and video title, and verdicts are cached only in the browser.
 - The video title is used to infer the game being played, improving the accuracy of spoiler detection.
 - API requests are made through a lightweight proxy managed by Fresh Chat Keeper.
 - **The proxy does not log chat messages or video titles.** They are discarded after processing.
 - For Anthropic's data handling practices, please refer to the [Anthropic Privacy Policy](https://www.anthropic.com/privacy).
+
+### Block Feature & Misjudgment Reports (v0.4.0 and later)
+
+**Block feature**
+
+A "block" feature lets you hide comments from specific users. The blocked user's YouTube channel ID (or handle, due to YouTube's 2026-05 DOM changes), display name at block time, and block timestamp are stored only in `chrome.storage.local`.
+
+- Block information is never sent to external servers.
+- You can unblock or clear all blocks at any time (the "Block list" tab in the popup).
+- Blocked users are not notified (shadow mute).
+
+**Misjudgment reports (filtered = False Positive / missed = False Negative)**
+
+When a comment was filtered incorrectly, you can report it by choosing the kind (mis-filtered / missed) and the intended category (spoiler / harassment / spam / off-topic / backseat / unknown / skip). Reports are stored locally (up to 100). **Only while opt-in consent is active**, they are also sent in parallel to the collection API described below (local only if you have not consented). A report contains the target comment text, selected category, and report kind — no information about you, the reporter.
 
 ### Opt-in Data Collection (v0.3.5 and later)
 
