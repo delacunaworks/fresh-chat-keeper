@@ -128,6 +128,18 @@ yt-live-chat-paid-message-renderer:hover .${TRIGGER_CLASS},
   .${TRIGGER_CLASS},
   .${TRIGGER_CLASS}[data-fck-trigger-vis="always"] { opacity: 0.6; }
 }
+/* B6a UI: 行内トリガ（right:34px・幅20px ≒ 右端0〜54px を占有）が、行の
+   右端まで伸びたコメント本文と**横方向で重なる**問題への対処。YouTube
+   ネイティブ 3 点メニューと同じレイアウト戦略＝本文コンテナに右余白を
+   確保し、テキストがトリガ領域に侵入しないようにする。renderer 直下
+   content のテキスト要素 message に inline-end パディングを足す
+   （トリガ幅+間隔ぶん）。※ content / message の実 box は YouTube DOM
+   依存のため値は保守的目安。最終確認は実機手動テスト（長文コメントでの
+   非重なり）に残す。 */
+yt-live-chat-text-message-renderer #message,
+yt-live-chat-paid-message-renderer #message {
+  padding-inline-end: 36px;
+}
 
 .fck-action-menu {
   position: fixed;

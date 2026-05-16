@@ -21,10 +21,13 @@ interface CategoryFiltersProps {
   onChange: (next: CategorySettings) => void;
 }
 
+// B6a UI: 基本タブ（ネタバレ強度）の表示順「厳格(左) / 標準 / 緩め(右)」に
+// 統一する。保存される値（CategoryStrength: 'loose'|'standard'|'strict'）と
+// マッピングは不変、UI の並び順のみ。既存設定の互換に影響なし。
 const STRENGTH_OPTIONS: { value: CategoryStrength; label: string }[] = [
-  { value: 'loose', label: '緩め' },
-  { value: 'standard', label: '標準' },
   { value: 'strict', label: '厳格' },
+  { value: 'standard', label: '標準' },
+  { value: 'loose', label: '緩め' },
 ];
 
 function Toggle({
@@ -43,7 +46,7 @@ function Toggle({
       aria-checked={checked}
       role="switch"
       aria-label={label}
-      className={`relative w-11 h-6 rounded-full transition-colors focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-indigo-500 focus:outline-none ${
+      className={`relative shrink-0 w-11 h-6 rounded-full transition-colors focus-visible:ring-2 focus-visible:ring-offset-1 focus-visible:ring-indigo-500 focus:outline-none ${
         checked ? 'bg-indigo-600' : 'bg-gray-300'
       }`}
     >
