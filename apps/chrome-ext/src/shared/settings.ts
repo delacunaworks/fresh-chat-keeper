@@ -89,10 +89,13 @@ export interface Settings {
   categories?: CategorySettings;
   /**
    * 行内トリガ（⋯ ブロック/報告アイコン）の表示モード（B5-fix）。
-   * 既存ユーザーの保存値には存在しないため optional。未設定時は
-   * {@link DEFAULT_SETTINGS}.triggerVisibility（`hover_only`）にマージされる。
+   *
+   * B6a typescript: **非 optional**。{@link DEFAULT_SETTINGS} が常時セットし、
+   * settings-loader が読み出し時に必ず DEFAULT とマージする（旧データに
+   * 無くても補完される）ため、型と実体（常に存在）を一致させる。
+   * 補完発動は settings-loader で debug 可視化。
    */
-  triggerVisibility?: TriggerVisibility;
+  triggerVisibility: TriggerVisibility;
 }
 
 export const DEFAULT_SETTINGS: Settings = {

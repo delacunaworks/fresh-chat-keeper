@@ -294,17 +294,11 @@ export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
     .then((settings) => {
       currentSettings = settings;
       currentKeywords = buildKeywordsFromSettings(settings);
-      // B5-fix: 行内トリガの表示モードを設定値で初期化（既定 hover_only）。
-      // B6a 可観測性: 未設定フォールバック発動を debug 可視化（migration 漏れ
-      // や旧データ起因の調査用。通常は debug レベルでノイズにならない）。
-      if (settings.triggerVisibility === undefined) {
-        console.debug(
-          '[FreshChatKeeper] triggerVisibility 未設定のため hover_only にフォールバック',
-        );
-      }
-      actionMenuManager.setTriggerVisibility(
-        settings.triggerVisibility ?? 'hover_only',
-      );
+      // B5-fix: 行内トリガの表示モードを設定値で初期化。
+      // B6a typescript: Settings.triggerVisibility は非 optional（loadSettings が
+      // DEFAULT 必須マージ済み）。未設定フォールバックの可観測性 debug は
+      // settings-loader 側に集約したのでここでは型どおり直接渡す。
+      actionMenuManager.setTriggerVisibility(settings.triggerVisibility);
 
       // Phase 2.5: opt-in している場合のみ collection-emit を起動。
       // anonToken が空でも初期化は進める（あとから resolve した時点で

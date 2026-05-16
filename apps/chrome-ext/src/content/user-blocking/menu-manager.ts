@@ -462,15 +462,20 @@ export class ActionMenuManager {
       `${target.authorDisplayName || 'このユーザー'} のコメント「${snippet}」へのアクション`,
     );
 
-    if (this.callbacks?.onStats) {
+    // B6a typescript: onBlock は必須宣言。呼び出しも optional-chain を使わず
+    // 非 null で扱う（型と実体の乖離解消）。createMenu は openMenu の
+    // `if (!this.callbacks) return;` ガード後にのみ呼ばれるが、TS は
+    // メソッド跨ぎで narrowing しないのでローカルに束ねて非 null 化する。
+    const cb = this.callbacks;
+    if (!cb) return menu;
+
+    if (cb.onStats) {
+      const onStats = cb.onStats;
       menu.appendChild(
         this.makeButton('fck-action-stats', '📊', '統計を見る', (e) => {
           e.stopPropagation();
           this.closeMenu();
-          this.callbacks?.onStats?.(
-            target.authorChannelId,
-            target.authorDisplayName,
-          );
+          onStats(target.authorChannelId, target.authorDisplayName);
         }),
       );
     }
@@ -484,12 +489,12 @@ export class ActionMenuManager {
           e.stopPropagation();
           const { authorChannelId, authorDisplayName } = target;
           this.closeMenu();
-          await this.callbacks?.onBlock(authorChannelId, authorDisplayName);
+          await cb.onBlock(authorChannelId, authorDisplayName);
         },
       ),
     );
 
-    if (this.callbacks?.onReport) {
+    if (cb.onReport) {
       menu.appendChild(
         this.makeButton('fck-action-report', '⚠️', '誤判定を報告', (e) => {
           e.stopPropagation();

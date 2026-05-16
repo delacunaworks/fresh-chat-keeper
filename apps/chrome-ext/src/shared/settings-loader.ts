@@ -150,9 +150,27 @@ function readStoredVersion(raw: unknown): number | undefined | null {
   return typeof v === 'number' ? v : undefined;
 }
 
+/**
+ * B6a 可観測性: 保存データに triggerVisibility が無く DEFAULT で補完された
+ * ことを debug 可視化（migration 漏れ / 旧データ起因の調査用。debug レベル
+ * なので通常運用ではノイズにならない）。Settings.triggerVisibility は B6a で
+ * 非 optional 化したため、補完はこの読み出し層で必ず行われる前提。
+ */
+function debugTriggerVisibilityFallback(
+  rawPartial: Partial<Settings>,
+  ctx: string,
+): void {
+  if (rawPartial.triggerVisibility === undefined) {
+    console.debug(
+      `[FreshChatKeeper] triggerVisibility 未設定 → DEFAULT(hover_only) 補完（${ctx}）`,
+    );
+  }
+}
+
 function stripVersion(raw: StoredSettings): Settings {
   const { version: _ignore, ...rest } = raw;
   void _ignore;
+  debugTriggerVisibilityFallback(rest as Partial<Settings>, 'v3 読み出し');
   const merged: Settings = { ...DEFAULT_SETTINGS, ...rest };
   // B4a hardening 🟡: 重要フィールドの型が壊れていたら警告して DEFAULT に補正。
   // chrome.storage は別拡張・手動編集・旧バグで型不整合が混入しうる。
@@ -220,6 +238,7 @@ async function migrateToCurrentVersion(
   }
 
   const partial = isValidShape ? (raw as Partial<Settings>) : {};
+  debugTriggerVisibilityFallback(partial, `${label} マイグレーション`);
   const merged: Settings = { ...DEFAULT_SETTINGS, ...partial };
   // version は付け直すので merged 側に残った旧 version は stored で上書きされる
   const stored: StoredSettings = { ...merged, version: CURRENT_SETTINGS_VERSION };
