@@ -124,6 +124,14 @@ const RUN_LLM =
 const QUALITY_MODEL = 'claude-haiku-4-5-20251001';
 const BATCH_SIZE = 25;
 const ACCURACY_THRESHOLD = 0.85;
+/**
+ * B6c: 非決定 LLM の run ガチャを排除するため複数 run の**最低値**で判定する。
+ * 既定 5。コスト調整用に FCK_LLM_QUALITY_RUNS で上書き可能（1 以上）。
+ */
+const QUALITY_RUNS = Math.max(
+  1,
+  Number.parseInt(process.env.FCK_LLM_QUALITY_RUNS ?? '5', 10) || 5,
+);
 
 /** 応答テキストから JSON 配列を抽出して messageId→primary を作る。 */
 function parsePrimaries(rawText: string): Map<string, string> {
@@ -172,58 +180,98 @@ async function callAnthropic(
   return json.content?.[0]?.text ?? '';
 }
 
-describe.runIf(RUN_LLM)('P3-TEST-01 実 LLM マルチラベル精度', () => {
-  it(
-    `primary 一致率 ${ACCURACY_THRESHOLD * 100}% 以上 + カテゴリ別精度`,
-    async () => {
-      const sys = buildSystemPrompt(buildQualityContext(), {
-        supportsCaching: false,
-      });
-      const predicted = new Map<string, string>();
+/** 1 run（全フィクスチャをバッチ送信）の overall・カテゴリ別精度を返す。 */
+async function measureOnce(): Promise<{
+  overall: number;
+  perCat: Record<string, { ok: number; total: number }>;
+}> {
+  const sys = buildSystemPrompt(buildQualityContext(), {
+    supportsCaching: false,
+  });
+  const predicted = new Map<string, string>();
+  for (let i = 0; i < QUALITY_FIXTURES.length; i += BATCH_SIZE) {
+    const batch = QUALITY_FIXTURES.slice(i, i + BATCH_SIZE).map((f, j) => ({
+      id: String(i + j),
+      text: f.comment,
+    }));
+    const text = await callAnthropic(sys, buildUserPrompt(batch));
+    for (const [id, primary] of parsePrimaries(text)) {
+      predicted.set(id, primary);
+    }
+  }
+  const perCat: Record<string, { ok: number; total: number }> = {};
+  let ok = 0;
+  QUALITY_FIXTURES.forEach((f, i) => {
+    const exp = f.expectedPrimary;
+    perCat[exp] ??= { ok: 0, total: 0 };
+    perCat[exp].total++;
+    if (predicted.get(String(i)) === exp) {
+      ok++;
+      perCat[exp].ok++;
+    }
+  });
+  return { overall: ok / QUALITY_FIXTURES.length, perCat };
+}
 
-      for (let i = 0; i < QUALITY_FIXTURES.length; i += BATCH_SIZE) {
-        const batch = QUALITY_FIXTURES.slice(i, i + BATCH_SIZE).map(
-          (f, j) => ({ id: String(i + j), text: f.comment }),
-        );
-        const text = await callAnthropic(sys, buildUserPrompt(batch));
-        for (const [id, primary] of parsePrimaries(text)) {
-          predicted.set(id, primary);
+function median(xs: number[]): number {
+  const s = [...xs].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+describe.runIf(RUN_LLM)('P3-TEST-01 実 LLM マルチラベル精度（複数 run 最低値）', () => {
+  it(
+    `${QUALITY_RUNS} run 最低値で overall・各カテゴリ ${ACCURACY_THRESHOLD * 100}% 以上`,
+    async () => {
+      // B6c: 非決定 LLM の run ガチャ排除。QUALITY_RUNS 回計測し、
+      // overall・各カテゴリの **run をまたいだ最低値** で ≥85% を assert する。
+      const cats = new Set<string>();
+      const overallByRun: number[] = [];
+      const catAccByRun: Record<string, number[]> = {};
+
+      for (let r = 0; r < QUALITY_RUNS; r++) {
+        const { overall, perCat } = await measureOnce();
+        overallByRun.push(overall);
+        const lines: string[] = [];
+        for (const [cat, s] of Object.entries(perCat)) {
+          cats.add(cat);
+          const acc = s.ok / s.total;
+          (catAccByRun[cat] ??= []).push(acc);
+          lines.push(`  ${cat}: ${s.ok}/${s.total} (${(acc * 100).toFixed(1)}%)`);
         }
+        // eslint-disable-next-line no-console
+        console.log(
+          `[P3-TEST-01 run ${r + 1}/${QUALITY_RUNS}] overall ${(overall * 100).toFixed(1)}%\n${lines.join('\n')}`,
+        );
       }
 
-      const perCat: Record<string, { ok: number; total: number }> = {};
-      let ok = 0;
-      QUALITY_FIXTURES.forEach((f, i) => {
-        const exp = f.expectedPrimary;
-        perCat[exp] ??= { ok: 0, total: 0 };
-        perCat[exp].total++;
-        if (predicted.get(String(i)) === exp) {
-          ok++;
-          perCat[exp].ok++;
-        }
-      });
-
-      const overall = ok / QUALITY_FIXTURES.length;
-      // 完了報告に転記するためカテゴリ別精度を出力
-      const lines = Object.entries(perCat).map(
-        ([cat, s]) =>
-          `  ${cat}: ${s.ok}/${s.total} (${((s.ok / s.total) * 100).toFixed(1)}%)`,
-      );
+      const overallMin = Math.min(...overallByRun);
       // eslint-disable-next-line no-console
       console.log(
-        `[P3-TEST-01] overall ${(overall * 100).toFixed(1)}% (${ok}/${QUALITY_FIXTURES.length})\n${lines.join('\n')}`,
+        `[P3-TEST-01 SUMMARY ${QUALITY_RUNS} runs] overall min ${(overallMin * 100).toFixed(1)}% / median ${(median(overallByRun) * 100).toFixed(1)}%`,
       );
+      for (const cat of cats) {
+        const accs = catAccByRun[cat] ?? [0];
+        // eslint-disable-next-line no-console
+        console.log(
+          `  ${cat}: min ${(Math.min(...accs) * 100).toFixed(1)}% / median ${(median(accs) * 100).toFixed(1)}% (runs: ${accs.map((a) => (a * 100).toFixed(0)).join(',')})`,
+        );
+      }
 
-      // overall だけでなく **各カテゴリも 85% 以上** を満たすこと
-      // （完了判定基準「各カテゴリと overall が 85% 以上」を厳密にゲート）。
-      expect(overall).toBeGreaterThanOrEqual(ACCURACY_THRESHOLD);
-      for (const [cat, s] of Object.entries(perCat)) {
+      // 最低値ゲート: 「運の良い 1 run」では通さない
+      expect(
+        overallMin,
+        `overall min over ${QUALITY_RUNS} runs`,
+      ).toBeGreaterThanOrEqual(ACCURACY_THRESHOLD);
+      for (const cat of cats) {
+        const accs = catAccByRun[cat] ?? [0];
         expect(
-          s.ok / s.total,
-          `category "${cat}" accuracy ${s.ok}/${s.total}`,
+          Math.min(...accs),
+          `category "${cat}" min over ${QUALITY_RUNS} runs (runs: ${accs.map((a) => a.toFixed(2)).join(',')})`,
         ).toBeGreaterThanOrEqual(ACCURACY_THRESHOLD);
       }
     },
-    180_000,
+    // 5 run × ~5 バッチ × ~数十秒。run 数に比例して十分長く取る。
+    Math.max(180_000, QUALITY_RUNS * 120_000),
   );
 });
