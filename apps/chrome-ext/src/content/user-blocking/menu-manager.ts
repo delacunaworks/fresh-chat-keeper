@@ -134,17 +134,25 @@ yt-live-chat-paid-message-renderer:hover .${TRIGGER_CLASS},
   .${TRIGGER_CLASS},
   .${TRIGGER_CLASS}[data-fck-trigger-vis="always"] { opacity: 0.6; }
 }
-/* B6a UI: 行内トリガ（right:34px・幅20px ≒ 右端0〜54px を占有）が、行の
-   右端まで伸びたコメント本文と**横方向で重なる**問題への対処。YouTube
-   ネイティブ 3 点メニューと同じレイアウト戦略＝本文コンテナに右余白を
-   確保し、テキストがトリガ領域に侵入しないようにする。renderer 直下
-   content のテキスト要素 message に inline-end パディングを足す
-   （トリガ幅+間隔ぶん）。※ content / message の実 box は YouTube DOM
-   依存のため値は保守的目安。最終確認は実機手動テスト（長文コメントでの
-   非重なり）に残す。 */
-yt-live-chat-text-message-renderer #message,
-yt-live-chat-paid-message-renderer #message {
-  padding-inline-end: 36px;
+/* B6b UI: 行内トリガ（right:34px・幅20px ≒ renderer 右端 0〜54px を占有）が、
+   行の右端まで伸びたコメント本文と**横方向で重なる**（解像度依存）問題。
+   実機 Computed で確定: renderer=flex、#content=width:362px 固定で本文右端を
+   支配、#menu(YouTube ⋮)=absolute right:0 w:32、#message は不在ケースあり。
+   renderer 幅（コメント欄幅=解像度）が狭いと 362px 固定の #content 右端が
+   FCK トリガ位置に接近して重なる。
+   対処: B6a の #message パディングは無効（#message 不在 & 本文右端は #content
+   362px 固定が支配）。YouTube が #menu のために #content 幅を制御しているのと
+   同じ発想で、**#content 側に FCK トリガ幅ぶんの inline-end パディングを確保**
+   し、box-sizing:border-box を明示して内容幅が実際に縮むようにする
+   （content-box のままだと width:362px に加算され逆効果になるため）。
+   #menu を flex 並べる案は YouTube の absolute 管理を壊すので採らない。
+   ※ Shadow DOM(style-scope) / box-sizing 上書きの効きは YouTube DOM 依存。
+   最終確認は実機手動テスト（**狭・広 両解像度**で本文・#menu・.fck-trigger
+   三者非重複）に残す。 */
+yt-live-chat-text-message-renderer #content,
+yt-live-chat-paid-message-renderer #content {
+  box-sizing: border-box;
+  padding-inline-end: 40px;
 }
 
 .fck-action-menu {
