@@ -65,7 +65,7 @@ export interface ActionMenuCallbacks {
     target: ActionMenuTarget,
     reportedLabel: ReportedLabel | undefined,
     reportKind: ReportKind,
-  ) => void;
+  ) => void | Promise<void>;
   /**
    * 報告フォームの文言用に FP/FN を解決する（フィルタ済み→FP / 表示中→FN）。
    * ⚠️ 押下時に **1 回だけ**呼んでスナップショットする。未注入時 'false_negative'。
@@ -518,7 +518,7 @@ export class ActionMenuManager {
     cls: string,
     glyph: string,
     label: string,
-    onClick: (e: MouseEvent) => void,
+    onClick: (e: MouseEvent) => void | Promise<void>,
   ): HTMLButtonElement {
     const btn = document.createElement('button');
     btn.type = 'button';
@@ -528,7 +528,23 @@ export class ActionMenuManager {
     btn.setAttribute('role', 'menuitem');
     btn.setAttribute('aria-label', label);
     btn.tabIndex = 0;
-    btn.addEventListener('click', onClick);
+    // B6a silent-failure: onClick が async（🚫 onBlock 等）の場合の
+    // Promise rejection / 同期 throw を握り潰さず、SR とログに出す。
+    // makeButton の型を void|Promise<void> に広げ rejection を捕捉する。
+    btn.addEventListener('click', (e) => {
+      const handleErr = (err: unknown) => {
+        console.error('[FreshChatKeeper] アクションメニュー操作に失敗:', err);
+        announce('操作に失敗しました', { assertive: true });
+      };
+      try {
+        const r = onClick(e);
+        if (r && typeof (r as Promise<void>).then === 'function') {
+          (r as Promise<void>).catch(handleErr);
+        }
+      } catch (err) {
+        handleErr(err);
+      }
+    });
     return btn;
   }
 
@@ -548,8 +564,11 @@ export class ActionMenuManager {
     const form = buildReportForm({
       text: target.text,
       reportKind,
-      onSubmit: (reportedLabel) => {
-        onReport(target, reportedLabel, reportKind);
+      // B6a silent-failure: onReport を await し、保存成功時のみ
+      // 「報告を送信しました」+ closeMenu。失敗（reject）は report-form 側の
+      // submit ハンドラが捕捉して assertive 告知 + 再送可能化する。
+      onSubmit: async (reportedLabel) => {
+        await onReport(target, reportedLabel, reportKind);
         announce('報告を送信しました');
         this.closeMenu();
       },

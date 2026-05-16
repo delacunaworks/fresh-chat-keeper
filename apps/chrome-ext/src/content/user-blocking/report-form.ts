@@ -106,8 +106,12 @@ export function buildPreviewText(text: string): { short: string; truncated: bool
 export interface BuildReportFormOptions {
   text: string;
   reportKind: ReportKind;
-  /** 送信。reportedLabel: ラベル / 'unknown' / undefined（スキップ） */
-  onSubmit: (reportedLabel: ReportedLabel | undefined) => void;
+  /**
+   * 送信。reportedLabel: ラベル / 'unknown' / undefined（スキップ）。
+   * B6a: 保存を await できるよう Promise<void> も許容。reject 時は本フォームの
+   * submit ハンドラが捕捉して assertive 告知 + 再送可能化する。
+   */
+  onSubmit: (reportedLabel: ReportedLabel | undefined) => void | Promise<void>;
   onCancel: () => void;
 }
 
@@ -269,7 +273,7 @@ export function buildReportForm(opts: BuildReportFormOptions): ReportFormHandle 
     actionBtns[nextIdx].focus();
   });
 
-  submitBtn.addEventListener('click', () => {
+  submitBtn.addEventListener('click', async () => {
     if (selected === null) {
       // A-3 補強: 必須未選択は assertive（WCAG 3.3.1 Error Identification）
       announce('種別が選択されていません。いずれかを選んでください', {
@@ -278,8 +282,21 @@ export function buildReportForm(opts: BuildReportFormOptions): ReportFormHandle 
       radios[0]?.focus();
       return;
     }
+    // B6a silent-failure: 二重送信ガード + onSubmit を await。保存失敗
+    // （reject）は assertive 告知し submit を再度有効化して再送可能にする。
+    if (submitBtn.disabled) return;
+    submitBtn.disabled = true;
     const opt = RADIO_OPTIONS[selected];
-    opts.onSubmit(opt.value === '__skip__' ? undefined : opt.value);
+    try {
+      await opts.onSubmit(opt.value === '__skip__' ? undefined : opt.value);
+      // 成功時の告知/クローズは呼び出し側（menu-manager の onSubmit）が担当
+    } catch (err) {
+      console.warn('[FreshChatKeeper] 誤判定報告の送信に失敗:', err);
+      announce('報告の保存に失敗しました。もう一度お試しください', {
+        assertive: true,
+      });
+      submitBtn.disabled = false;
+    }
   });
   cancelBtn.addEventListener('click', () => opts.onCancel());
 

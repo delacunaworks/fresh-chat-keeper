@@ -266,9 +266,11 @@ export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
     // （フィルタ済み→FP / 表示中→FN）。⚠️ 押下時に 1 回だけ評価され、
     // menu-manager がスナップショットして onReport に渡す（送信時再計算しない）。
     getReportKind: (target) => reportKindForElement(target.messageEl),
-    onReport: (target, reportedLabel, reportKind) => {
-      void handleReport(target.messageEl, target.text, reportedLabel, reportKind);
-    },
+    // B6a silent-failure: Promise を返す（void しない）。保存失敗時は
+    // handleReport が reject し、report-form の submit ハンドラが assertive
+    // 告知 + 再送可能化する。成功時のみ menu-manager が完了告知 + close。
+    onReport: (target, reportedLabel, reportKind) =>
+      handleReport(target.messageEl, target.text, reportedLabel, reportKind),
   });
 
   // Stage 2 キャッシュの読み込みとトークン取得を並行して初期化
@@ -293,6 +295,13 @@ export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
       currentSettings = settings;
       currentKeywords = buildKeywordsFromSettings(settings);
       // B5-fix: 行内トリガの表示モードを設定値で初期化（既定 hover_only）。
+      // B6a 可観測性: 未設定フォールバック発動を debug 可視化（migration 漏れ
+      // や旧データ起因の調査用。通常は debug レベルでノイズにならない）。
+      if (settings.triggerVisibility === undefined) {
+        console.debug(
+          '[FreshChatKeeper] triggerVisibility 未設定のため hover_only にフォールバック',
+        );
+      }
       actionMenuManager.setTriggerVisibility(
         settings.triggerVisibility ?? 'hover_only',
       );
@@ -1045,16 +1054,16 @@ async function handleReport(
     }
   }
 
-  // B5 silent-failure hardening: saveMisreport（chrome.storage）失敗を握り
-  // 潰さない。emit（サーバ送信）は上で完了している一方ローカル保存が無言で
-  // 失敗すると「報告したのに misreports に残らない」不整合になるため warn。
+  // B5/B6a silent-failure hardening: saveMisreport（chrome.storage）失敗を
+  // 握り潰さない。emit（サーバ送信）は上で完了している一方ローカル保存が
+  // 無言で失敗すると「報告したのに misreports に残らない」不整合になる。
+  // B6a: warn に加えて **rethrow** し、onReport→report-form 経由で
+  // ユーザー/SR に assertive 告知させ再送可能にする（UI/SR 無反映を解消）。
   try {
     await saveMisreport(entry);
   } catch (err) {
-    console.warn(
-      '[FreshChatKeeper] 誤判定報告のローカル保存に失敗:',
-      err,
-    );
+    console.warn('[FreshChatKeeper] 誤判定報告のローカル保存に失敗:', err);
+    throw err;
   }
 }
 
