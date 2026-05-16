@@ -4,7 +4,7 @@
 
 ## Short Description (132 characters max)
 
-AI-powered spoiler filter for YouTube game streams. Works on archives and live streams. No account needed — just install and play.
+AI filter for YouTube game-stream chat: spoilers, harassment, spam, backseating. User blocking. Archives & live. No account needed.
 
 ---
 
@@ -38,6 +38,17 @@ Have you ever had your enjoyment ruined by spoilers, hints, or unsolicited advic
 
 **Auto Game Detection from Video Title**
 - Automatically infers the game being played from the video title for smarter AI judgment — no manual setup needed
+
+**Multi-Category Filtering (new in v0.4.0)**
+- Beyond spoilers, the AI also classifies harassment, spam/flooding, off-topic / other-streamer mentions, and backseat gaming
+- Toggle each category on/off and set its strength independently (new categories are off by default — enable only what you want)
+
+**User Blocking (new in v0.4.0)**
+- Block a poster in one click and hide their comments, including past ones
+- Undo support and a block-list manager. Block info is stored only on your device
+
+**Automatic Spam Detection (new in v0.4.0)**
+- Detects repeated comments, URL flooding, and emoji spam before the AI call
 
 **Custom Block Words**
 - Build your own block list for any words or phrases you want to hide instantly
@@ -79,7 +90,7 @@ Full privacy policy: https://github.com/delacunaworks/fresh-chat-keeper/blob/mai
 
 ### A Note on Accuracy
 
-Fresh Chat Keeper uses AI to understand context, but cannot guarantee every spoiler will be caught. Detection accuracy is highest for games with dedicated support in our database. For other titles, enabling genre templates and custom block words can significantly improve results. If something is incorrectly filtered, use the "❌ False positive" button next to the comment to report it — your reports help us improve future accuracy.
+Fresh Chat Keeper uses AI to understand context, but cannot guarantee every spoiler (or other flagged comment) will be caught. Detection accuracy is highest for games with dedicated support in our database. For other titles, enabling genre templates and custom block words can significantly improve results. If something is judged incorrectly — either wrongly filtered or missed — open the "⋯" menu next to the comment and choose "⚠️ Report" to submit the kind and category — your reports help us improve future accuracy.
 
 
 ### Supported Platforms
