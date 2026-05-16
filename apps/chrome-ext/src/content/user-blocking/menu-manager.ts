@@ -121,7 +121,13 @@ yt-live-chat-paid-message-renderer:hover .${TRIGGER_CLASS},
 .${TRIGGER_CLASS}:hover,
 .${TRIGGER_CLASS}:focus-visible,
 .${TRIGGER_CLASS}[aria-expanded="true"] { opacity: 1; }
-.${TRIGGER_CLASS}:focus-visible { outline: 2px solid #3b82f6; outline-offset: 1px; }
+/* B6a a11y(WCAG 2.4.11): 可変背景でも 3:1 を保証する二重リング
+   （白内側 outline + 濃色外側 box-shadow）。単色 outline は濃色背景で消える。 */
+.${TRIGGER_CLASS}:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 1px;
+  box-shadow: 0 0 0 4px #1a73e8;
+}
 /* タッチ（hover 不可）はホバーで濃くできないので、モードに関わらず常時可視寄り。
    always の属性セレクタ（specificity 高）に負けないよう同セレクタも上書きする。 */
 @media (hover: none) {
@@ -167,8 +173,10 @@ yt-live-chat-paid-message-renderer #message {
 }
 .fck-action-menu button:hover { background: rgba(255, 255, 255, 0.2); }
 .fck-action-menu button:focus-visible {
-  outline: 2px solid #3b82f6;
+  /* B6a a11y(WCAG 2.4.11): 可変背景 3:1 保証の二重リング */
+  outline: 2px solid #fff;
   outline-offset: 1px;
+  box-shadow: 0 0 0 4px #1a73e8;
 }
 .fck-action-menu .fck-action-close { opacity: 0.6; font-size: 16px; }
 .fck-action-menu .fck-action-close:hover,
@@ -560,6 +568,13 @@ export class ActionMenuManager {
     menuEl.appendChild(form.element);
     // フォームは縦長になりがち。再計測して配置し直す。
     this.reposition();
+    // B6a a11y: menu→報告フォームへ role が切り替わる（menu 喪失）ことを
+    // SR に polite 告知（フォーカス移動だけだと文脈の変化が伝わりにくい）。
+    announce(
+      reportKind === 'false_positive'
+        ? '誤フィルタの報告フォームを開きました'
+        : '見逃しの報告フォームを開きました',
+    );
     form.focusFirst();
   }
 

@@ -57,14 +57,12 @@ const STYLE_TEXT = `
   background: transparent; border: none; color: #8ab4f8; cursor: pointer;
   font-size: 11px; padding: 2px 4px; border-radius: 4px;
 }
-.fck-report-preview-toggle:focus-visible { outline: 2px solid #3b82f6; outline-offset: 1px; }
 .fck-report-radiogroup { display: flex; flex-wrap: wrap; gap: 4px; }
 .fck-report-radio {
   background: rgba(255,255,255,0.08); border: 1px solid transparent; color: #fff;
   cursor: pointer; font-size: 12px; padding: 4px 8px; border-radius: 4px;
 }
 .fck-report-radio[aria-checked="true"] { background: #3b82f6; border-color: #93c5fd; font-weight: 600; }
-.fck-report-radio:focus-visible { outline: 2px solid #93c5fd; outline-offset: 1px; }
 .fck-report-actions { display: flex; gap: 6px; justify-content: flex-end; }
 .fck-report-actions button {
   border: none; cursor: pointer; font-size: 12px; padding: 5px 12px; border-radius: 4px;
@@ -72,7 +70,19 @@ const STYLE_TEXT = `
 .fck-report-submit { background: #3b82f6; color: #fff; }
 .fck-report-submit:hover { background: #2563eb; }
 .fck-report-cancel { background: rgba(255,255,255,0.12); color: #ddd; }
-.fck-report-actions button:focus-visible { outline: 2px solid #93c5fd; outline-offset: 1px; }
+.fck-report-sr-hint {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap;
+}
+/* B6a a11y(WCAG 2.4.11): フォーカスリングを可変背景でも 3:1 保証する
+   二重リング（白内側 + 濃色外側）。単色 outline は青系背景上で消えるため。 */
+.fck-report-preview-toggle:focus-visible,
+.fck-report-radio:focus-visible,
+.fck-report-actions button:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 1px;
+  box-shadow: 0 0 0 4px #1a73e8;
+}
 `;
 
 function ensureStyles(): void {
@@ -158,12 +168,22 @@ export function buildReportForm(opts: BuildReportFormOptions): ReportFormHandle 
   root.appendChild(preview);
 
   // ── リング2: カテゴリ radiogroup ───────────────────────
+  // B6a a11y: 操作方法と必須性を SR に補足する説明（aria-describedby）。
+  const radioHint = document.createElement('span');
+  radioHint.className = 'fck-report-sr-hint';
+  radioHint.id = `fck-report-radio-hint-${Date.now()}`;
+  radioHint.textContent =
+    '上下キーで移動して選択します。送信には種別の選択が必須です。';
+  root.appendChild(radioHint);
+
   const radiogroup = document.createElement('div');
   radiogroup.className = 'fck-report-radiogroup';
   radiogroup.setAttribute('role', 'radiogroup');
   radiogroup.setAttribute('aria-label', '誤判定の種別を選択');
   // B5 B-2: 種別選択は送信に必須。SR に必須性を伝える（WCAG 3.3.1 / 4.1.2）。
   radiogroup.setAttribute('aria-required', 'true');
+  // B6a a11y: 操作方法/必須性の補足を radiogroup に紐付け（aria-describedby）。
+  radiogroup.setAttribute('aria-describedby', radioHint.id);
   let selected: number | null = null;
   const radios: HTMLButtonElement[] = [];
 

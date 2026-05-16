@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type KeyboardEvent } from 'react';
 import {
   DEFAULT_SETTINGS,
   STORAGE_KEY,
@@ -82,34 +82,66 @@ function Section({ label, children }: { label: string; children: React.ReactNode
   );
 }
 
+// B6a a11y: 単一選択なので aria-pressed のトグル群ではなく
+// role="radiogroup" + role="radio"。roving tabindex（選択中のみ Tab 到達）+
+// 矢印キー移動＝選択（radiogroup 規約）。WCAG 4.1.2 / 2.1.1。
 function SegmentedControl({
   options,
   value,
   onChange,
+  ariaLabel,
 }: {
   options: { value: string; label: string }[];
   value: string;
   onChange: (v: string) => void;
+  ariaLabel: string;
 }) {
+  const idx = Math.max(
+    0,
+    options.findIndex((o) => o.value === value),
+  );
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const last = options.length - 1;
+    let next: number | null = null;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = idx >= last ? 0 : idx + 1;
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = idx <= 0 ? last : idx - 1;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = last;
+    if (next === null) return;
+    e.preventDefault();
+    onChange(options[next].value);
+    const btns = e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]');
+    btns[next]?.focus();
+  };
   return (
-    <div className="flex rounded-md border border-gray-200 overflow-hidden text-xs">
-      {options.map((opt, i) => (
-        <button
-          key={opt.value}
-          type="button"
-          onClick={() => onChange(opt.value)}
-          aria-pressed={value === opt.value}
-          className={`flex-1 py-1.5 transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500 focus:outline-none ${
-            i > 0 ? 'border-l border-gray-200' : ''
-          } ${
-            value === opt.value
-              ? 'bg-indigo-600 text-white font-medium'
-              : 'bg-white text-gray-600 hover:bg-gray-50'
-          }`}
-        >
-          {opt.label}
-        </button>
-      ))}
+    <div
+      role="radiogroup"
+      aria-label={ariaLabel}
+      onKeyDown={onKeyDown}
+      className="flex rounded-md border border-gray-200 overflow-hidden text-xs"
+    >
+      {options.map((opt, i) => {
+        const checked = value === opt.value;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            role="radio"
+            aria-checked={checked}
+            tabIndex={checked ? 0 : -1}
+            onClick={() => onChange(opt.value)}
+            className={`flex-1 py-1.5 transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500 focus:outline-none ${
+              i > 0 ? 'border-l border-gray-200' : ''
+            } ${
+              checked
+                ? 'bg-indigo-600 text-white font-medium'
+                : 'bg-white text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -769,6 +801,7 @@ export default function App() {
             ]}
             value={settings.filterMode}
             onChange={(v) => update({ filterMode: v as FilterMode })}
+            ariaLabel="フィルタ強度"
           />
           <p className="text-xs text-gray-400 mt-1.5">
             {settings.filterMode === 'strict' && 'ネタバレ・匂わせ・攻略ヒントをすべてブロック'}
@@ -786,6 +819,7 @@ export default function App() {
             ]}
             value={settings.displayMode}
             onChange={(v) => update({ displayMode: v as DisplayMode })}
+            ariaLabel="表示方式"
           />
           <p className="text-xs text-gray-400 mt-1.5">
             {settings.displayMode === 'placeholder'
@@ -805,6 +839,7 @@ export default function App() {
             onChange={(v) =>
               update({ triggerVisibility: v as TriggerVisibility })
             }
+            ariaLabel="ブロック/報告アイコンの表示"
           />
           <p className="text-xs text-gray-400 mt-1.5">
             {(settings.triggerVisibility ?? 'hover_only') === 'hover_only'

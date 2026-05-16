@@ -11,6 +11,7 @@
  * 強度は SegmentedControl（focus-visible ring）。タブ自体の roving は App.tsx 側。
  */
 
+import type { KeyboardEvent } from 'react';
 import type {
   CategorySettings,
   CategoryStrength,
@@ -68,29 +69,53 @@ function StrengthControl({
   onChange: (v: CategoryStrength) => void;
   groupLabel: string;
 }) {
+  // B6a a11y: 単一選択は radiogroup/radio。roving tabindex + 矢印キー移動＝選択。
+  const idx = Math.max(
+    0,
+    STRENGTH_OPTIONS.findIndex((o) => o.value === value),
+  );
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const last = STRENGTH_OPTIONS.length - 1;
+    let next: number | null = null;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = idx >= last ? 0 : idx + 1;
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = idx <= 0 ? last : idx - 1;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = last;
+    if (next === null) return;
+    e.preventDefault();
+    onChange(STRENGTH_OPTIONS[next].value);
+    const btns = e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]');
+    btns[next]?.focus();
+  };
   return (
     <div
       className="flex rounded-md border border-gray-200 overflow-hidden text-xs mt-1.5"
-      role="group"
+      role="radiogroup"
       aria-label={`${groupLabel}の強度`}
+      onKeyDown={onKeyDown}
     >
-      {STRENGTH_OPTIONS.map((opt, i) => (
-        <button
-          key={opt.value}
-          type="button"
-          aria-pressed={value === opt.value}
-          onClick={() => onChange(opt.value)}
-          className={`flex-1 py-1 transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500 focus:outline-none ${
-            i > 0 ? 'border-l border-gray-200' : ''
-          } ${
-            value === opt.value
-              ? 'bg-indigo-600 text-white font-medium'
-              : 'bg-white text-gray-600 hover:bg-gray-50'
-          }`}
-        >
-          {opt.label}
-        </button>
-      ))}
+      {STRENGTH_OPTIONS.map((opt, i) => {
+        const checked = value === opt.value;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            role="radio"
+            aria-checked={checked}
+            tabIndex={checked ? 0 : -1}
+            onClick={() => onChange(opt.value)}
+            className={`flex-1 py-1 transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500 focus:outline-none ${
+              i > 0 ? 'border-l border-gray-200' : ''
+            } ${
+              checked
+                ? 'bg-indigo-600 text-white font-medium'
+                : 'bg-white text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
     </div>
   );
 }
