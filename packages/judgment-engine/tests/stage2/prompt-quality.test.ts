@@ -86,7 +86,18 @@ describe('P3-TEST-01 フィクスチャ構造健全性', () => {
   });
 });
 
-/** 全カテゴリ ON の v3 設定で品質計測用コンテキストを作る。 */
+/**
+ * 全カテゴリ ON・**全カテゴリ strict** の v3 設定で品質計測コンテキストを作る。
+ *
+ * P3-TEST-01 は「LLM がコメントを正しいカテゴリに**分類できるか**」の品質
+ * 指標。`strength` は本来ユーザー向けの verdict ゲート（standard だと
+ * off_topic は『他配信者言及のみ』、spoiler は『攻略ヒントは safe』等）で
+ * あり、分類能力の指標としては strict（カテゴリ定義どおりの最大リコール）
+ * で測るのが正しい。standard で測ると一般的な雑談 off_topic がプロンプト
+ * 定義どおり safe 化し、フィクスチャ（真の off_topic）と構造的に一致
+ * しなくなる（フィクスチャを実出力に寄せる行為とは異なる、ハーネス側の
+ * 測定条件の是正）。
+ */
 function buildQualityContext(): JudgmentContext {
   const settings: FilterSettings = {
     version: 3,
@@ -94,11 +105,11 @@ function buildQualityContext(): JudgmentContext {
     displayMode: 'placeholder',
     filterMode: 'archive',
     categories: {
-      spoiler: { enabled: true, strength: 'standard' },
-      harassment: { enabled: true, strength: 'standard' },
+      spoiler: { enabled: true, strength: 'strict' },
+      harassment: { enabled: true, strength: 'strict' },
       spam: { enabled: true },
-      offTopic: { enabled: true, strength: 'standard' },
-      backseat: { enabled: true, strength: 'standard' },
+      offTopic: { enabled: true, strength: 'strict' },
+      backseat: { enabled: true, strength: 'strict' },
     },
     customBlockWords: [],
     userTier: 'free',
@@ -203,7 +214,15 @@ describe.runIf(RUN_LLM)('P3-TEST-01 実 LLM マルチラベル精度', () => {
         `[P3-TEST-01] overall ${(overall * 100).toFixed(1)}% (${ok}/${QUALITY_FIXTURES.length})\n${lines.join('\n')}`,
       );
 
+      // overall だけでなく **各カテゴリも 85% 以上** を満たすこと
+      // （完了判定基準「各カテゴリと overall が 85% 以上」を厳密にゲート）。
       expect(overall).toBeGreaterThanOrEqual(ACCURACY_THRESHOLD);
+      for (const [cat, s] of Object.entries(perCat)) {
+        expect(
+          s.ok / s.total,
+          `category "${cat}" accuracy ${s.ok}/${s.total}`,
+        ).toBeGreaterThanOrEqual(ACCURACY_THRESHOLD);
+      }
     },
     180_000,
   );
