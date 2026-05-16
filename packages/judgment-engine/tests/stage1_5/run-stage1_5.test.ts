@@ -165,10 +165,11 @@ describe('runStage1_5', () => {
     });
   });
 
-  describe('横断履歴の利用', () => {
-    it('別ユーザー3人の同一文言（長文）→ coordinated_copy_paste で filter', () => {
-      // B5-fix: 短文（≤6）は coordinated 対象外なので 7+ 文字の文言で検証する
-      const COPY = 'スパムスパムスパム'; // 9 codepoints
+  describe('横断履歴の利用（B6a: coordinated 撤去 → gray）', () => {
+    it('別ユーザー3人の同一文言（長文・7字超定番含む）でも filter せず gray（Stage 2 委譲）', () => {
+      // B6a: coordinated_copy_paste 撤去。コール&レスポンス／定番リアクションと
+      // 協調スパムは文脈依存なので Stage 1.5 で確定せず Stage 2 LLM に委ねる
+      const COPY = 'おつかれさまでした'; // 9 codepoints（7字超の定番挨拶）
       const t = BASE_TS - 3000;
       // 別ユーザーが先に同一文言を投稿
       runStage1_5(
@@ -198,7 +199,33 @@ describe('runStage1_5', () => {
         buildContext(true),
         store,
       );
-      // alice が同じ文言を流す
+      // alice が同じ文言を流す → coordinated 撤去後は filter せず gray
+      const r = runStage1_5(
+        buildMessage(COPY, { text: COPY, timestamp: BASE_TS }),
+        buildContext(true),
+        store,
+      );
+      expect(r).toEqual({ outcome: 'gray', reason: 'needs_stage2' });
+    });
+
+    it('同一ユーザーの自己コピペは横断履歴があっても引き続き filter', () => {
+      const COPY = 'チャンネル登録お願いします';
+      // alice 自身が過去に同一文言（self_copy_paste の材料）
+      runStage1_5(
+        buildMessage(COPY, { text: COPY, timestamp: BASE_TS - 60_000 }),
+        buildContext(true),
+        store,
+      );
+      // 別ユーザーも同一文言（旧 coordinated 材料、撤去後は影響しない）
+      runStage1_5(
+        buildMessage(COPY, {
+          text: COPY,
+          authorChannelId: 'UC_bob',
+          timestamp: BASE_TS - 3000,
+        }),
+        buildContext(true),
+        store,
+      );
       const r = runStage1_5(
         buildMessage(COPY, { text: COPY, timestamp: BASE_TS }),
         buildContext(true),
@@ -206,7 +233,7 @@ describe('runStage1_5', () => {
       );
       expect(r.outcome).toBe('filter');
       if (r.outcome === 'filter') {
-        expect(r.reason).toBe('coordinated_copy_paste');
+        expect(r.reason).toBe('self_copy_paste');
       }
     });
   });

@@ -2,10 +2,12 @@
  * detectSpam の単体テスト。
  *
  * 検証観点:
- * - 5 パターン（rapid_fire / self_copy_paste / coordinated_copy_paste /
- *   url_spam / emoji_spam）それぞれが検出される
+ * - 4 パターン（rapid_fire / self_copy_paste / url_spam / emoji_spam）
+ *   それぞれが検出される
  * - B5-fix: character_repeat は Stage 1.5 から撤去（gray→Stage 2 委譲）
- * - B5-fix: 短文（≤6 コードポイント）は rapid_fire / coordinated の対象外
+ * - B6a: coordinated_copy_paste は Stage 1.5 から撤去（gray→Stage 2 委譲。
+ *   コール&レスポンス／定番リアクションと協調スパムは文脈依存）
+ * - B5-fix: 短文（≤6 コードポイント）は rapid_fire の対象外
  *   （定番リアクション「ざわざわ」「うおお」「草」「888」保護）。
  *   self_copy_paste / url_spam / emoji_spam は短文でも維持
  * - 正当なコメントを誤検出しない（false-positive 抑制）
@@ -139,7 +141,7 @@ describe('detectSpam', () => {
       expect(r).toEqual({ type: 'none' });
     });
 
-    it('「草」を別アカ3人が同時刻に流しても coordinated にならない（短文除外）', () => {
+    it('「草」を別アカ3人が同時刻に流しても none（coordinated 撤去 B6a）', () => {
       const r = detectSpam(
         msg('草', NOW),
         emptyUser,
@@ -309,9 +311,9 @@ describe('detectSpam', () => {
     });
   });
 
-  // ─── coordinated_copy_paste: 横断コピペ ─────────────────────
-  describe('coordinated_copy_paste', () => {
-    it('別アカウント3人が同一文言（長文）なら coordinated_copy_paste', () => {
+  // ─── coordinated_copy_paste 撤去（B6a、Stage 2 委譲）─────────
+  describe('coordinated_copy_paste 撤去（B6a）', () => {
+    it('別アカウント3人が同一文言（長文）でも none（協調スパムは Stage 2 委譲）', () => {
       const r = detectSpam(
         msg('お祭り騒ぎだワッショイ', NOW),
         emptyUser,
@@ -321,35 +323,34 @@ describe('detectSpam', () => {
           { text: 'お祭り騒ぎだワッショイ', channelId: 'UC_dave', timestamp: NOW - 1000 },
         ]),
       );
-      expect(r).toEqual({ type: 'coordinated_copy_paste', confidence: 0.85 });
-    });
-
-    it('同一アカウントが3回投稿しても coordinated_copy_paste にはならない', () => {
-      const r = detectSpam(
-        msg('もう一度どうぞお願いします', NOW),
-        emptyUser,
-        chatHist([
-          { text: 'もう一度どうぞお願いします', channelId: 'UC_bob', timestamp: NOW - 3000 },
-          { text: 'もう一度どうぞお願いします', channelId: 'UC_bob', timestamp: NOW - 2000 },
-          { text: 'もう一度どうぞお願いします', channelId: 'UC_bob', timestamp: NOW - 1000 },
-        ]),
-      );
-      // 別アカウント数は 1 だけ → 3未満で発火しない
       expect(r).toEqual({ type: 'none' });
     });
 
-    it('投稿者自身のチャンネルからの発言は coordinated のカウントに入らない', () => {
-      const r = detectSpam(
-        msg('みんなで応援しています', NOW),
+    it('7 文字超の定番リアクション（うぽつです/おつかれさまでした）も none', () => {
+      const greeting = detectSpam(
+        msg('おつかれさまでした', NOW),
         emptyUser,
         chatHist([
-          { text: 'みんなで応援しています', channelId: 'UC_alice', timestamp: NOW - 3000 },
-          { text: 'みんなで応援しています', channelId: 'UC_bob', timestamp: NOW - 2000 },
-          { text: 'みんなで応援しています', channelId: 'UC_carol', timestamp: NOW - 1000 },
+          { text: 'おつかれさまでした', channelId: 'UC_b', timestamp: NOW - 3000 },
+          { text: 'おつかれさまでした', channelId: 'UC_c', timestamp: NOW - 2000 },
+          { text: 'おつかれさまでした', channelId: 'UC_d', timestamp: NOW - 1000 },
+          { text: 'おつかれさまでした', channelId: 'UC_e', timestamp: NOW - 500 },
         ]),
       );
-      // UC_alice は除外、別アカウントは2 → 3未満
-      expect(r).toEqual({ type: 'none' });
+      expect(greeting).toEqual({ type: 'none' });
+    });
+
+    it('coordinated 撤去後も同一ユーザー起因の self_copy_paste は検出（横断履歴があっても）', () => {
+      const r = detectSpam(
+        msg('チャンネル登録よろしく', NOW),
+        userHist([{ text: 'チャンネル登録よろしく', timestamp: NOW - 30_000 }]),
+        chatHist([
+          { text: 'チャンネル登録よろしく', channelId: 'UC_x', timestamp: NOW - 3000 },
+          { text: 'チャンネル登録よろしく', channelId: 'UC_y', timestamp: NOW - 2000 },
+          { text: 'チャンネル登録よろしく', channelId: 'UC_z', timestamp: NOW - 1000 },
+        ]),
+      );
+      expect(r).toEqual({ type: 'self_copy_paste', confidence: 0.95 });
     });
   });
 
@@ -427,18 +428,17 @@ describe('detectSpam', () => {
 
   // ─── しきい値定数の公開 ────────────────────────────────────
   describe('SPAM_DETECTION_THRESHOLDS', () => {
-    it('しきい値が外部から参照可能（B5-fix で CHARACTER_REPEAT 撤去 / SHORT_TEXT 追加）', () => {
+    it('しきい値が外部から参照可能（B6a で COORDINATED_THRESHOLD 撤去）', () => {
       expect(SPAM_DETECTION_THRESHOLDS.RAPID_FIRE_WINDOW_MS).toBe(10_000);
       expect(SPAM_DETECTION_THRESHOLDS.RAPID_FIRE_THRESHOLD).toBe(2);
-      expect(SPAM_DETECTION_THRESHOLDS.COORDINATED_THRESHOLD).toBe(3);
       expect(SPAM_DETECTION_THRESHOLDS.URL_SPAM_THRESHOLD).toBe(3);
       expect(SPAM_DETECTION_THRESHOLDS.EMOJI_SPAM_RATIO).toBe(0.8);
       expect(SPAM_DETECTION_THRESHOLDS.EMOJI_SPAM_MIN_LENGTH).toBe(20);
       expect(SPAM_DETECTION_THRESHOLDS.SHORT_TEXT_MAX_CODEPOINTS).toBe(6);
-      expect(
-        (SPAM_DETECTION_THRESHOLDS as Record<string, unknown>)
-          .CHARACTER_REPEAT_MIN_LENGTH,
-      ).toBeUndefined();
+      const t = SPAM_DETECTION_THRESHOLDS as Record<string, unknown>;
+      // B5-fix / B6a で撤去した定数は公開オブジェクトに存在しない
+      expect(t.CHARACTER_REPEAT_MIN_LENGTH).toBeUndefined();
+      expect(t.COORDINATED_THRESHOLD).toBeUndefined();
     });
   });
 });

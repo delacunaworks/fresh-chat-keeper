@@ -33,6 +33,7 @@ import type { Message, JudgmentContext, JudgmentLabel } from '../types.js';
 import { HistoryStore } from './history-store.js';
 import {
   detectSpam,
+  SPAM_DETECTION_THRESHOLDS,
   type SpamDetectionResult,
 } from './spam-detector.js';
 
@@ -99,6 +100,19 @@ export function runStage1_5(
 
   // 履歴更新は判定後（自己コピペ等の誤発火を避ける）
   historyStore.addMessage(message);
+
+  // B6a 可観測性ログ: 短文除外（≤ SHORT_TEXT_MAX_CODEPOINTS）で rapid_fire を
+  // 見送り gray に落ちた経路を debug 可視化（「なぜ弾かれない？」の調査用。
+  // 通常運用ではノイズにならない debug レベル）。
+  if (
+    spamResult.type === 'none' &&
+    Array.from(message.text).length <=
+      SPAM_DETECTION_THRESHOLDS.SHORT_TEXT_MAX_CODEPOINTS
+  ) {
+    console.debug(
+      `[FreshChatKeeper] Stage 1.5: short text (≤${SPAM_DETECTION_THRESHOLDS.SHORT_TEXT_MAX_CODEPOINTS}cp) exempt from rapid_fire; passing to Stage 2`,
+    );
+  }
 
   if (
     spamResult.type !== 'none' &&
