@@ -21,6 +21,7 @@ import { getAllGenreTemplates } from '@fresh-chat-keeper/knowledge-base';
 import { createChromeTransport } from './chrome-transport.js';
 import {
   parseSpoilerCategory,
+  normalizeVerdict,
   saveJudgeCacheEntry,
   type JudgeCacheEntry,
   type OnStage2Result,
@@ -77,7 +78,13 @@ export async function sendStage2Batch(
     // フォールバックする。両方無ければ判定失敗扱い（spoilerCategory: null）。
     const primary = sanitizeLabel(result.primary);
     const labels = sanitizeLabels(result.labels);
+    // B7: proxy は context.settings（カテゴリ ON/OFF・強度）を見て
+    // primaryToVerdict で算出済みの verdict を返す。これを保存し
+    // verdictFromCache に最優先で使わせる（旧コードは verdict を捨て
+    // primary から再計算し新カテゴリを常に allow に倒していた）。
+    const verdict = normalizeVerdict(result.verdict);
     const entry: JudgeCacheEntry = {
+      ...(verdict ? { verdict } : {}),
       ...(primary ? { primary } : {}),
       ...(labels.length > 0 ? { labels } : {}),
       spoilerCategory: parseSpoilerCategory(result.spoilerCategory),
