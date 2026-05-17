@@ -45,6 +45,14 @@ export type Stage2Verdict = 'block' | 'allow';
  * `primary` 未設定かつ `spoilerCategory: null` で表す。
  */
 export interface JudgeCacheEntry {
+  /**
+   * B7: proxy が `context.settings`（カテゴリ ON/OFF・強度）を見て
+   * `primaryToVerdict` で計算済みの最終 verdict。**後方互換 optional**
+   * （B7 以前に保存された旧キャッシュには無い＝従来フォールバックで処理）。
+   * 存在すれば {@link verdictFromCache} はこれを最優先で返す（キャッシュ
+   * 再評価時も proxy 同等の結果になる）。
+   */
+  verdict?: Stage2Verdict;
   /** Phase 3: 最も深刻な単一ラベル（labels から LABEL_PRECEDENCE で導出済み） */
   primary?: JudgmentLabel;
   /** Phase 3: マルチラベルの生結果 */
@@ -73,19 +81,26 @@ export type OnStage2Result = (candidate: Stage2Candidate, entry: JudgeCacheEntry
  * キャッシュエントリと現在のフィルタモードから verdict を導出する。
  * フィルタモードを変更しても proxy に再リクエストせずに正しい判定が得られる。
  *
- * Phase 3 の評価順:
- * 1. `primary` があれば優先（マルチラベル新経路）
- *    - 'safe' → allow
- *    - 'spoiler' → block（強度は Stage 2 プロンプト側で適用済みなので、
- *      LLM が spoiler と判定した時点でブロック対象）
- *    - 'harassment' / 'spam' / 'off_topic' / 'backseat' → allow
- *      （B3 ではこれらのカテゴリ ON/OFF UI が未実装。Stage 1.5 の spam は
- *      archive.ts 側で直接フィルタするので Stage 2 キャッシュには乗らない。
- *      B4 でカテゴリ別 UI が入ったら強度・ON/OFF を反映する）
- * 2. `primary` がなければ後方互換 `spoilerCategory` で判定（旧キャッシュ /
- *    proxy ブリッジ）。null（判定失敗）は lenient→allow / その他→block
+ * 評価順:
+ * 0. **B7: `entry.verdict` があれば最優先で返す**。proxy が `context.settings`
+ *    のカテゴリ ON/OFF・強度を見て `primaryToVerdict` で計算済みの正しい値
+ *    なので、chrome-ext 側で primary から再計算（＝旧バグで新カテゴリを常に
+ *    allow に倒していた）必要はない。これによりキャッシュ再評価（リロード後
+ *    proxy を叩かずキャッシュから verdict 決定）でも proxy 同等になる。
+ * 1. `entry.verdict` 無し（**B7 以前に保存された旧キャッシュのみ**）→ `primary`:
+ *    - 'safe' → allow / 'spoiler' → block
+ *    - 'harassment'/'spam'/'off_topic'/'backseat' → allow（**従来フォールバック
+ *      を後方互換として維持**。新カテゴリは B7 以降 entry.verdict で正しく
+ *      判定されるため、ここに来るのは verdict 列を持たない旧エントリだけ）
+ * 2. `primary` もなければ後方互換 `spoilerCategory`（旧キャッシュ / proxy
+ *    ブリッジ）。null（判定失敗）は lenient→allow / その他→block
  */
 export function verdictFromCache(entry: JudgeCacheEntry, filterMode: FilterMode): Stage2Verdict {
+  // B7: proxy が settings 反映済みで計算した verdict を最優先（出口バグ修正）。
+  if (entry.verdict !== undefined) {
+    return entry.verdict;
+  }
+
   if (entry.primary !== undefined) {
     switch (entry.primary) {
       case 'safe':
@@ -96,15 +111,11 @@ export function verdictFromCache(entry: JudgeCacheEntry, filterMode: FilterMode)
       case 'spam':
       case 'off_topic':
       case 'backseat':
-        // 既知の限界（B4a 🟡 で可視化、B4b/Phase 3.5 で解消予定）:
-        // verdictFromCache は filterMode しか受け取らないため、これらの
-        // カテゴリ ON/OFF を **キャッシュ再評価時** には反映できず常に allow。
-        // judge 時点では proxy 側 primaryToVerdict が context.settings の
-        // categories.{name}.enabled を見て正しい verdict を返すので、
-        // 初回判定は正しい。filterMode 変更後のキャッシュ再評価でのみ
-        // 取りこぼす（稀なエッジ）。per-message ホットパスなので runtime
-        // ログは出さず本コメントで可視化する。
-        // TODO(B4b/3.5): verdictFromCache にカテゴリ enable を渡して厳密化
+        // B7: ここに来るのは **entry.verdict を持たない B7 以前の旧
+        // キャッシュ**のみ（B7 以降の新カテゴリは上の entry.verdict 経路で
+        // proxy の settings 反映済み verdict が返る）。旧エントリは従来動作
+        // ＝allow を維持する（後方互換。リロードで再判定され verdict 付きに
+        // 更新される）。proxy 完璧・出口バグは B7 で entry.verdict 経路に移管済み。
         return 'allow';
       default: {
         // B4a hardening D: コンパイル時網羅チェック。JudgmentLabel に
@@ -139,6 +150,20 @@ export function verdictFromCache(entry: JudgeCacheEntry, filterMode: FilterMode)
 export function parseSpoilerCategory(raw: string | undefined | null): LLMSpoilerCategory | null {
   if (raw == null) return null;
   return LLM_CATEGORY_SET.has(raw) ? (raw as LLMSpoilerCategory) : null;
+}
+
+/**
+ * B7: proxy レスポンスの `result.verdict`（`FilterVerdict` =
+ * 'block' | 'allow' | 'uncertain'）を {@link Stage2Verdict} へ正規化する。
+ *
+ * - 'block' / 'allow' → そのまま（proxy が settings 反映済みで計算した値）
+ * - 'uncertain'（LLM 失敗フォールバック）/ 未知値 / null / undefined →
+ *   **undefined**（`JudgeCacheEntry.verdict` に保存せず、従来の primary /
+ *   spoilerCategory フォールバックに委ねる）。"不正値は undefined" 方針。
+ *   degraded レスポンスは sendStage2Batch 側でそもそもキャッシュしない。
+ */
+export function normalizeVerdict(raw: unknown): Stage2Verdict | undefined {
+  return raw === 'block' || raw === 'allow' ? raw : undefined;
 }
 
 // ─── キャッシュ ────────────────────────────────────────────────────────────────
