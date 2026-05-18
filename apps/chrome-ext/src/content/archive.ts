@@ -55,7 +55,11 @@ import {
   type Settings,
 } from '../shared/settings.js';
 import { loadSettings } from '../shared/settings-loader.js';
-import { shouldRunStage1_5 } from './stage-dispatch.js';
+import {
+  shouldRunStage1_5,
+  isAnyNewCategoryEnabled,
+  shouldTryGameplayHintStage2,
+} from './stage-dispatch.js';
 import type { MisreportEntry } from '@fresh-chat-keeper/shared';
 import {
   initStage2Cache,
@@ -629,8 +633,21 @@ function processMessage(el: Element, isReprocess = false): void {
   // ── Stage 2: キーワード単体マッチ → プロキシへ委託 ──────────────────────────
   const stage2keyword = matchesKeywordForStage2(text, currentKeywords);
   if (!stage2keyword) {
-    // gameId !== 'none' かつジャンルテンプレート選択時: 指示・攻略ヒント系フレーズを Stage 2 へ
-    if (currentSettings.gameId !== 'none' && currentGenreTemplates.length > 0) {
+    // 指示・攻略ヒント系フレーズ（gameplay-hints の stage2_phrases）を Stage 2 へ。
+    // 従来: gameId !== 'none' かつジャンルテンプレート選択時のみ。
+    // B8b: 新カテゴリ（harassment/spam/off_topic/backseat）が 1 つでも ON なら
+    // gameId を問わず（'none' でも）送る。gameId='none'（ゲーム未選択）で
+    // 新カテゴリが Stage 2 に届かなかった入口制約の緩和。stage2_phrases
+    // マッチ限定は維持（無条件で全 gray を送らない＝LLM コスト/月間上限と
+    // 衝突しない。コスト規模は現状と同等）。テンプレート未選択
+    // （currentGenreTemplates 空）では従来どおり gameplay-hints 経路は無効。
+    if (
+      shouldTryGameplayHintStage2(
+        currentSettings.gameId,
+        isAnyNewCategoryEnabled(currentSettings.categories),
+        currentGenreTemplates.length,
+      )
+    ) {
       const hintPhrase = matchesGameplayHintForStage2(text, currentGenreTemplates);
       if (hintPhrase !== null) {
         const progress = currentSettings.progressByGame[currentSettings.gameId];

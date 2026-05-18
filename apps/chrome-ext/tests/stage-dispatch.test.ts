@@ -8,6 +8,7 @@ import { describe, it, expect } from 'vitest';
 import {
   shouldRunStage1_5,
   isAnyNewCategoryEnabled,
+  shouldTryGameplayHintStage2,
 } from '../src/content/stage-dispatch.js';
 import type { CategorySettings } from '../src/shared/settings.js';
 
@@ -51,5 +52,42 @@ describe('B8b: isAnyNewCategoryEnabled', () => {
     expect(
       isAnyNewCategoryEnabled(cats({ harassment: true, backseat: true })),
     ).toBe(true);
+  });
+});
+
+describe('B8b: shouldTryGameplayHintStage2', () => {
+  it('テンプレート未選択（count=0）→ 常に false（gameplay-hints 経路無効）', () => {
+    expect(shouldTryGameplayHintStage2('rdr2', true, 0)).toBe(false);
+    expect(shouldTryGameplayHintStage2('none', true, 0)).toBe(false);
+    expect(shouldTryGameplayHintStage2('other', false, 0)).toBe(false);
+  });
+
+  it('従来経路維持: gameId !== none + テンプレ選択 → true（新カテゴリ無関係）', () => {
+    expect(shouldTryGameplayHintStage2('rdr2', false, 2)).toBe(true);
+    expect(shouldTryGameplayHintStage2('other', false, 1)).toBe(true);
+  });
+
+  it('B8b 緩和: gameId=none でも新カテゴリ ON + テンプレ選択 → true', () => {
+    expect(shouldTryGameplayHintStage2('none', true, 1)).toBe(true);
+  });
+
+  it('B8b: gameId=none かつ新カテゴリ全 OFF → false（従来どおり送らない）', () => {
+    expect(shouldTryGameplayHintStage2('none', false, 3)).toBe(false);
+  });
+
+  it('結合: gameId=none + backseat ON + テンプレ 1 → Stage 2 へ（B8b 主シナリオ）', () => {
+    expect(
+      shouldTryGameplayHintStage2(
+        'none',
+        isAnyNewCategoryEnabled(cats({ backseat: true })),
+        1,
+      ),
+    ).toBe(true);
+  });
+
+  it('回帰: spoiler のみ運用（新カテゴリ OFF）で gameId=none は対象外', () => {
+    expect(
+      shouldTryGameplayHintStage2('none', isAnyNewCategoryEnabled(cats()), 2),
+    ).toBe(false);
   });
 });

@@ -40,4 +40,25 @@ export function isAnyNewCategoryEnabled(
   );
 }
 
-// （B8b: shouldTryGameplayHintStage2 は次コミットで追加）
+/**
+ * B8b: gameplay-hints の `stage2_phrases` マッチコメントを Stage 2 へ
+ * 送るべきか（spoiler キーワード単体マッチに当たらなかった gray に対して）。
+ *
+ * 従来は `gameId !== 'none'` かつジャンルテンプレート選択時のみ。B8b で
+ * 「新カテゴリが 1 つでも ON なら gameId を問わず（'none' でも）送る」よう
+ * 緩和。`stage2_phrases` マッチ限定（templateCount > 0 前提）は維持し、
+ * 無条件で全 gray を Stage 2 に送らない（LLM コスト/月間上限と衝突しない）。
+ *
+ * @param gameId 現在の gameId（'none' = ゲーム未選択/デフォルト）
+ * @param anyNewCategoryEnabled {@link isAnyNewCategoryEnabled} の結果
+ * @param templateCount 選択中の gameplay-hints テンプレート数
+ *   （0 なら gameplay-hints 経路は無効＝従来どおり）
+ */
+export function shouldTryGameplayHintStage2(
+  gameId: string,
+  anyNewCategoryEnabled: boolean,
+  templateCount: number,
+): boolean {
+  if (templateCount <= 0) return false;
+  return gameId !== 'none' || anyNewCategoryEnabled;
+}
