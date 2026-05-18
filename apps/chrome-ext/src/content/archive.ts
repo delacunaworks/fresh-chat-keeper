@@ -55,6 +55,7 @@ import {
   type Settings,
 } from '../shared/settings.js';
 import { loadSettings } from '../shared/settings-loader.js';
+import { shouldRunStage1_5 } from './stage-dispatch.js';
 import type { MisreportEntry } from '@fresh-chat-keeper/shared';
 import {
   initStage2Cache,
@@ -495,7 +496,8 @@ function reprocessAll(itemsContainer: Element, clearReveals = true): void {
 
   if (currentSettings?.enabled) {
     itemsContainer.querySelectorAll(MSG_TEXT_SELECTOR).forEach((el) => {
-      processMessage(el);
+      // B8a: 遡及一括再処理。Stage 1.5 spam はスキップさせる（下記 processMessage 参照）。
+      processMessage(el, true);
     });
   }
 
@@ -505,7 +507,12 @@ function reprocessAll(itemsContainer: Element, clearReveals = true): void {
 
 // ─── メッセージ処理 ────────────────────────────────────────────────────────────
 
-function processMessage(el: Element): void {
+/**
+ * @param isReprocess `reprocessAll` 由来の遡及一括再処理なら true。
+ *   このとき Stage 1.5（spam）をスキップする（下記 B8a 参照）。
+ *   通常の新規流入（MutationObserver / 初回スキャン）は false。
+ */
+function processMessage(el: Element, isReprocess = false): void {
   if (!isContextValid()) {
     shutdownOnInvalidContext();
     return;
@@ -605,7 +612,17 @@ function processMessage(el: Element): void {
   // 文字連打・URL羅列・絵文字連打などのスパムパターンを LLM 呼び出し前に検出。
   // spoiler キーワードに当たったコメントは上で return 済みなので、ここに来る
   // 時点で primary 優先順位（spoiler > spam）の競合は起きない。
-  if (runStage1_5Filter(el, text)) {
+  //
+  // B8a: 遡及一括再処理（reprocessAll、設定 OFF→ON 等）では Stage 1.5 を
+  // **完全にスキップ**する（runStage1_5Filter を呼ばない＝HistoryStore も
+  // 汚さない）。spam 検出は時系列・流入順依存（HistoryStore は到着順前提）で、
+  // 既存表示済みを一括ループ再処理すると nextStage15Timestamp が短時間連番化し
+  // rapid_fire / self_copy が誤爆 → 既存コメント全ブロック（問題1の
+  // reprocessAll 一括版）。ユーザー期待（spam ON 後に流入する分から適用）とも
+  // 一致するため、遡及では skip し、通常の新規流入（isReprocess=false）で
+  // のみ spam を判定する。Stage 1 / Stage 2（spoiler・新カテゴリ）の遡及
+  // 再判定は従来どおり継続する。
+  if (shouldRunStage1_5(isReprocess) && runStage1_5Filter(el, text)) {
     return;
   }
 
