@@ -1,5 +1,5 @@
 /**
- * B8: stage-dispatch 純関数のユニットテスト。
+ * B8 / B9: stage-dispatch 純関数のユニットテスト。
  * archive.ts 本体（DOM/chrome 依存）は手動テスト担保、判断ロジックは
  * 純関数に切り出してここで保護する。
  */
@@ -9,6 +9,8 @@ import {
   shouldRunStage1_5,
   isAnyNewCategoryEnabled,
   shouldTryGameplayHintStage2,
+  ensureGameplayHintsForCategories,
+  GAMEPLAY_HINTS_TEMPLATE_ID,
 } from '../src/content/stage-dispatch.js';
 import type { CategorySettings } from '../src/shared/settings.js';
 
@@ -89,5 +91,63 @@ describe('B8b: shouldTryGameplayHintStage2', () => {
     expect(
       shouldTryGameplayHintStage2('none', isAnyNewCategoryEnabled(cats()), 2),
     ).toBe(false);
+  });
+});
+
+describe('B9: ensureGameplayHintsForCategories', () => {
+  it('新カテゴリ全 OFF → 入力配列を変更せず同一参照を返す（自動追加しない）', () => {
+    const templates: string[] = [];
+    expect(ensureGameplayHintsForCategories(cats(), templates)).toBe(templates);
+    const withOthers = ['action-horror'];
+    expect(ensureGameplayHintsForCategories(cats(), withOthers)).toBe(withOthers);
+  });
+
+  it('categories 未設定（旧ユーザー）→ 入力配列を変更しない', () => {
+    const templates = ['action-horror'];
+    expect(ensureGameplayHintsForCategories(undefined, templates)).toBe(templates);
+  });
+
+  it('各新カテゴリ単独 ON で gameplay-hints 未選択 → 末尾に追加', () => {
+    for (const key of ['harassment', 'spam', 'offTopic', 'backseat'] as const) {
+      const result = ensureGameplayHintsForCategories(cats({ [key]: true }), []);
+      expect(result).toEqual([GAMEPLAY_HINTS_TEMPLATE_ID]);
+    }
+  });
+
+  it('既存の他テンプレが残った状態で末尾に追加（既存テンプレを壊さない）', () => {
+    const result = ensureGameplayHintsForCategories(
+      cats({ backseat: true }),
+      ['action-horror', 'rpg'],
+    );
+    expect(result).toEqual(['action-horror', 'rpg', GAMEPLAY_HINTS_TEMPLATE_ID]);
+  });
+
+  it('新カテゴリ ON でも既に gameplay-hints 含む → 重複追加せず同一参照', () => {
+    const templates = ['action-horror', GAMEPLAY_HINTS_TEMPLATE_ID];
+    expect(
+      ensureGameplayHintsForCategories(cats({ harassment: true }), templates),
+    ).toBe(templates);
+  });
+
+  it('複数新カテゴリ ON でも 1 つだけ追加（冪等）', () => {
+    const result = ensureGameplayHintsForCategories(
+      cats({ harassment: true, spam: true, offTopic: true, backseat: true }),
+      [],
+    );
+    expect(result).toEqual([GAMEPLAY_HINTS_TEMPLATE_ID]);
+  });
+
+  it('自動削除しない: 新カテゴリ全 OFF へ戻しても gameplay-hints は残る', () => {
+    const templates = ['action-horror', GAMEPLAY_HINTS_TEMPLATE_ID];
+    const result = ensureGameplayHintsForCategories(cats(), templates);
+    expect(result).toBe(templates);
+    expect(result).toContain(GAMEPLAY_HINTS_TEMPLATE_ID);
+  });
+
+  it('入力配列を破壊しない（mutate 禁止）', () => {
+    const templates = ['action-horror'];
+    const snapshot = [...templates];
+    ensureGameplayHintsForCategories(cats({ backseat: true }), templates);
+    expect(templates).toEqual(snapshot);
   });
 });

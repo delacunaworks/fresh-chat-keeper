@@ -32,6 +32,7 @@ import { CollectionRevokeConfirmModal } from './CollectionRevokeConfirmModal.js'
 import { CategoryFilters } from './tabs/CategoryFilters.js';
 import { UserBlocklist } from './tabs/UserBlocklist.js';
 import { FirstTimeV3Notice } from './FirstTimeV3Notice.js';
+import { ensureGameplayHintsForCategories } from '../content/stage-dispatch.js';
 import type { CategorySettings } from '../shared/settings.js';
 import type { KBGame } from '@fresh-chat-keeper/knowledge-base';
 import { getAllGenreTemplates } from '@fresh-chat-keeper/knowledge-base';
@@ -712,7 +713,19 @@ export default function App() {
         <div id="fck-tabpanel-category" role="tabpanel" aria-labelledby="fck-tab-category">
           <CategoryFilters
             categories={categories}
-            onChange={(next) => update({ categories: next })}
+            onChange={(next) => {
+              // B9: 新カテゴリ ON 時に gameplay-hints テンプレートを自動有効化する。
+              // 新カテゴリの Stage 2 判定は gameplay-hints の stage2_phrases マッチを
+              // 起点に流れるため、テンプレ未選択だと「ON にしたのに効かない」。
+              // 自動追加のみ・自動削除なし（理由は ensureGameplayHintsForCategories）。
+              const current = settings.selectedGenreTemplates ?? [];
+              const nextTemplates = ensureGameplayHintsForCategories(next, current);
+              if (nextTemplates === current) {
+                update({ categories: next });
+              } else {
+                update({ categories: next, selectedGenreTemplates: nextTemplates });
+              }
+            }}
           />
         </div>
       )}

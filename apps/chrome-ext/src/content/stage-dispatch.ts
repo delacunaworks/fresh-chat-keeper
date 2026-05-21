@@ -62,3 +62,39 @@ export function shouldTryGameplayHintStage2(
   if (templateCount <= 0) return false;
   return gameId !== 'none' || anyNewCategoryEnabled;
 }
+
+/** {@link ensureGameplayHintsForCategories} で参照する gameplay-hints テンプレート ID。 */
+export const GAMEPLAY_HINTS_TEMPLATE_ID = 'gameplay-hints';
+
+/**
+ * B9: 新カテゴリ ON 時に gameplay-hints テンプレートを自動有効化する。
+ *
+ * 背景: 新カテゴリ（harassment / spam / off_topic / backseat）の Stage 2 判定は
+ * gameplay-hints の `stage2_phrases` マッチを起点に LLM に流れる。テンプレ未選択
+ * だと {@link shouldTryGameplayHintStage2} が false を返し「ON にしたのに効かない」
+ * 状態になる。UX 上「カテゴリ」と「ジャンルテンプレート」は別概念だが、構造上
+ * 連動が必須のためここで暗黙連動を担保する。設計正本:
+ * `dev-docs/phase-3-multilabel.md` B9。
+ *
+ * 設計判断（自動追加のみ・自動削除なし）:
+ * - 新カテゴリが 1 つでも ON で gameplay-hints が未選択なら追加。
+ * - 新カテゴリを全 OFF に戻しても gameplay-hints は **削除しない**（ユーザーが
+ *   攻略ヒント検出を意図的に選んでいる可能性があり、勝手に外すと意思に反する。
+ *   gameplay-hints 単体は spoiler 運用でも誤ブロック増にはならない＝攻略ヒント
+ *   系を Stage 2 に回すだけ）。
+ * - 入力配列を破壊しない（新配列を返すか、変更不要なら入力をそのまま返す）。
+ *
+ * @returns 必要なら gameplay-hints を末尾に追加した新配列、不要なら入力と同一参照。
+ */
+export function ensureGameplayHintsForCategories(
+  categories: CategorySettings | undefined,
+  selectedGenreTemplates: string[],
+): string[] {
+  if (!isAnyNewCategoryEnabled(categories)) {
+    return selectedGenreTemplates;
+  }
+  if (selectedGenreTemplates.includes(GAMEPLAY_HINTS_TEMPLATE_ID)) {
+    return selectedGenreTemplates;
+  }
+  return [...selectedGenreTemplates, GAMEPLAY_HINTS_TEMPLATE_ID];
+}
