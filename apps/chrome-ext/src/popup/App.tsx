@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type KeyboardEvent } from 'react';
 import {
   DEFAULT_SETTINGS,
   STORAGE_KEY,
@@ -8,6 +8,7 @@ import {
   getOrCreateAnonToken,
   type FilterMode,
   type DisplayMode,
+  type TriggerVisibility,
   type GameProgress,
   type Settings,
   type Stage2Usage,
@@ -28,6 +29,11 @@ import {
 } from '../content/collection-client.js';
 import { CollectionConsentModal } from './CollectionConsentModal.js';
 import { CollectionRevokeConfirmModal } from './CollectionRevokeConfirmModal.js';
+import { CategoryFilters } from './tabs/CategoryFilters.js';
+import { UserBlocklist } from './tabs/UserBlocklist.js';
+import { FirstTimeV3Notice } from './FirstTimeV3Notice.js';
+import { ensureGameplayHintsForCategories } from '../content/stage-dispatch.js';
+import type { CategorySettings } from '../shared/settings.js';
 import type { KBGame } from '@fresh-chat-keeper/knowledge-base';
 import { getAllGenreTemplates } from '@fresh-chat-keeper/knowledge-base';
 import aceAttorney1 from '@kb-data/ace-attorney-1.json';
@@ -77,32 +83,130 @@ function Section({ label, children }: { label: string; children: React.ReactNode
   );
 }
 
+// B6a a11y: 単一選択なので aria-pressed のトグル群ではなく
+// role="radiogroup" + role="radio"。roving tabindex（選択中のみ Tab 到達）+
+// 矢印キー移動＝選択（radiogroup 規約）。WCAG 4.1.2 / 2.1.1。
 function SegmentedControl({
   options,
   value,
   onChange,
+  ariaLabel,
 }: {
   options: { value: string; label: string }[];
   value: string;
   onChange: (v: string) => void;
+  ariaLabel: string;
 }) {
+  const idx = Math.max(
+    0,
+    options.findIndex((o) => o.value === value),
+  );
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    const last = options.length - 1;
+    let next: number | null = null;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = idx >= last ? 0 : idx + 1;
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = idx <= 0 ? last : idx - 1;
+    else if (e.key === 'Home') next = 0;
+    else if (e.key === 'End') next = last;
+    if (next === null) return;
+    e.preventDefault();
+    onChange(options[next].value);
+    const btns = e.currentTarget.querySelectorAll<HTMLButtonElement>('[role="radio"]');
+    btns[next]?.focus();
+  };
   return (
-    <div className="flex rounded-md border border-gray-200 overflow-hidden text-xs">
-      {options.map((opt, i) => (
-        <button
-          key={opt.value}
-          onClick={() => onChange(opt.value)}
-          className={`flex-1 py-1.5 transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500 focus:outline-none ${
-            i > 0 ? 'border-l border-gray-200' : ''
-          } ${
-            value === opt.value
-              ? 'bg-indigo-600 text-white font-medium'
-              : 'bg-white text-gray-600 hover:bg-gray-50'
-          }`}
-        >
-          {opt.label}
-        </button>
-      ))}
+    <div
+      role="radiogroup"
+      aria-label={ariaLabel}
+      onKeyDown={onKeyDown}
+      className="flex rounded-md border border-gray-200 overflow-hidden text-xs"
+    >
+      {options.map((opt, i) => {
+        const checked = value === opt.value;
+        return (
+          <button
+            key={opt.value}
+            type="button"
+            role="radio"
+            aria-checked={checked}
+            tabIndex={checked ? 0 : -1}
+            onClick={() => onChange(opt.value)}
+            className={`flex-1 py-1.5 transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500 focus:outline-none ${
+              i > 0 ? 'border-l border-gray-200' : ''
+            } ${
+              checked
+                ? 'bg-indigo-600 text-white font-medium'
+                : 'bg-white text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            {opt.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── タブバー（a11y: role=tablist + roving tabindex + 矢印キー）──────────
+
+type TabId = 'basic' | 'category' | 'blocklist';
+
+const TABS: { id: TabId; label: string }[] = [
+  { id: 'basic', label: '基本' },
+  { id: 'category', label: 'カテゴリ' },
+  { id: 'blocklist', label: 'ブロック' },
+];
+
+function TabBar({
+  active,
+  onChange,
+}: {
+  active: TabId;
+  onChange: (id: TabId) => void;
+}) {
+  const onKeyDown = (e: React.KeyboardEvent, idx: number) => {
+    let nextIdx: number | null = null;
+    if (e.key === 'ArrowRight') nextIdx = (idx + 1) % TABS.length;
+    else if (e.key === 'ArrowLeft') nextIdx = (idx - 1 + TABS.length) % TABS.length;
+    else if (e.key === 'Home') nextIdx = 0;
+    else if (e.key === 'End') nextIdx = TABS.length - 1;
+    if (nextIdx === null) return;
+    e.preventDefault();
+    const next = TABS[nextIdx];
+    onChange(next.id);
+    // roving: 移動先タブへフォーカス
+    document.getElementById(`fck-tab-${next.id}`)?.focus();
+  };
+
+  return (
+    <div
+      role="tablist"
+      aria-label="設定カテゴリ"
+      className="flex border-b border-gray-200 bg-gray-50"
+    >
+      {TABS.map((t, i) => {
+        const selected = t.id === active;
+        return (
+          <button
+            key={t.id}
+            id={`fck-tab-${t.id}`}
+            role="tab"
+            type="button"
+            aria-selected={selected}
+            aria-controls={`fck-tabpanel-${t.id}`}
+            tabIndex={selected ? 0 : -1}
+            onClick={() => onChange(t.id)}
+            onKeyDown={(e) => onKeyDown(e, i)}
+            className={`flex-1 py-2 text-xs font-medium transition-colors focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500 focus:outline-none ${
+              selected
+                ? 'text-indigo-600 border-b-2 border-indigo-600 bg-white'
+                : 'text-gray-500 hover:text-gray-700'
+            }`}
+          >
+            {t.label}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -555,13 +659,23 @@ export default function App() {
   const update = (partial: Partial<Settings>) => {
     const next = { ...settings, ...partial };
     setSettings(next);
-    // saveSettings が version: 2 を確実に付与する（直接 set すると剥がれる）
+    // saveSettings が最新世代 version (v3) を確実に付与する（直接 set すると剥がれる）
     void saveSettings(next);
   };
 
   const activeGame = GAMES.find((g) => g.id === settings.gameId) ?? GAMES[0];
   const activeProgress: GameProgress = settings.progressByGame[settings.gameId] ?? {
     progressModel: activeGame.progress_type,
+  };
+
+  const [activeTab, setActiveTab] = useState<TabId>('basic');
+
+  // 旧ユーザーの保存値に categories が無い場合は全 OFF デフォルトで補完
+  const categories: CategorySettings = settings.categories ?? {
+    harassment: { enabled: false, strength: 'standard' },
+    spam: { enabled: false },
+    offTopic: { enabled: false, strength: 'standard' },
+    backseat: { enabled: false, strength: 'standard' },
   };
 
   if (!loaded) {
@@ -591,6 +705,43 @@ export default function App() {
         </div>
       </div>
 
+      <FirstTimeV3Notice onGoToCategory={() => setActiveTab('category')} />
+
+      <TabBar active={activeTab} onChange={setActiveTab} />
+
+      {activeTab === 'category' && (
+        <div id="fck-tabpanel-category" role="tabpanel" aria-labelledby="fck-tab-category">
+          <CategoryFilters
+            categories={categories}
+            onChange={(next) => {
+              // B9: 新カテゴリ ON 時に gameplay-hints テンプレートを自動有効化する。
+              // 新カテゴリの Stage 2 判定は gameplay-hints の stage2_phrases マッチを
+              // 起点に流れるため、テンプレ未選択だと「ON にしたのに効かない」。
+              // 自動追加のみ・自動削除なし（理由は ensureGameplayHintsForCategories）。
+              const current = settings.selectedGenreTemplates ?? [];
+              const nextTemplates = ensureGameplayHintsForCategories(next, current);
+              if (nextTemplates === current) {
+                update({ categories: next });
+              } else {
+                update({ categories: next, selectedGenreTemplates: nextTemplates });
+              }
+            }}
+          />
+        </div>
+      )}
+
+      {activeTab === 'blocklist' && (
+        <div id="fck-tabpanel-blocklist" role="tabpanel" aria-labelledby="fck-tab-blocklist">
+          <UserBlocklist />
+        </div>
+      )}
+
+      <div
+        id="fck-tabpanel-basic"
+        role="tabpanel"
+        aria-labelledby="fck-tab-basic"
+        hidden={activeTab !== 'basic'}
+      >
       {/* 設定パネル（無効時は薄く表示） */}
       <div className={settings.enabled ? '' : 'opacity-40 pointer-events-none'}>
         {/* ゲーム選択 */}
@@ -663,6 +814,7 @@ export default function App() {
             ]}
             value={settings.filterMode}
             onChange={(v) => update({ filterMode: v as FilterMode })}
+            ariaLabel="フィルタ強度"
           />
           <p className="text-xs text-gray-400 mt-1.5">
             {settings.filterMode === 'strict' && 'ネタバレ・匂わせ・攻略ヒントをすべてブロック'}
@@ -680,11 +832,32 @@ export default function App() {
             ]}
             value={settings.displayMode}
             onChange={(v) => update({ displayMode: v as DisplayMode })}
+            ariaLabel="表示方式"
           />
           <p className="text-xs text-gray-400 mt-1.5">
             {settings.displayMode === 'placeholder'
               ? '「⚠ フィルタされました」に書き換え（クリックで表示）'
               : '完全に非表示（Flow Chat等の他拡張には効かない場合あり）'}
+          </p>
+        </Section>
+
+        {/* 行内トリガ（ブロック/報告アイコン）の表示（B5-fix） */}
+        <Section label="ブロック/報告アイコン">
+          <SegmentedControl
+            options={[
+              { value: 'hover_only', label: 'ホバー時のみ' },
+              { value: 'always', label: '常に薄く表示' },
+            ]}
+            value={settings.triggerVisibility ?? 'hover_only'}
+            onChange={(v) =>
+              update({ triggerVisibility: v as TriggerVisibility })
+            }
+            ariaLabel="ブロック/報告アイコンの表示"
+          />
+          <p className="text-xs text-gray-400 mt-1.5">
+            {(settings.triggerVisibility ?? 'hover_only') === 'hover_only'
+              ? 'コメントにマウスを乗せた時だけ ⋯ を表示（既定）'
+              : '常に薄く ⋯ を表示し、ホバーで濃くなる'}
           </p>
         </Section>
       </div>
@@ -696,6 +869,7 @@ export default function App() {
         - 能動的に探した人だけが ON にする UX を実現
       */}
       <CollectionSection apiUrl={settings.collectionApiUrl} />
+      </div>
 
     </div>
   );

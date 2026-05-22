@@ -8,6 +8,37 @@ import type { MisreportEntry } from '@fresh-chat-keeper/shared';
 export type FilterMode = 'strict' | 'standard' | 'lenient';
 export type DisplayMode = 'placeholder' | 'hidden';
 
+/**
+ * 行内トリガ（ブロック/報告アイコン ⋯）の表示モード（B5-fix）。
+ * - `hover_only`（既定）: 行ホバー時のみ表示（YouTube `#menu` と同挙動。
+ *   通常は何も出ず、折り返し本文への被り・常時の視界ノイズが消える）
+ * - `always`: 常に薄く表示し、ホバーで濃く（B5 までの挙動）
+ *
+ * タッチ環境（hover 不可）はモードに関わらず常時可視寄り（CSS 側で担保）。
+ */
+export type TriggerVisibility = 'hover_only' | 'always';
+
+/** Phase 3 マルチラベル新カテゴリの強度（spam は強度なし） */
+export type CategoryStrength = 'loose' | 'standard' | 'strict';
+
+/**
+ * Phase 3（v0.4.0 / P3-UI-04）で追加された新カテゴリ設定。
+ *
+ * spoiler は従来どおり「基本」タブの {@link Settings.filterMode} +
+ * {@link Settings.enabled} で制御し、ここには **含めない**（既存ユーザーの
+ * 設定を移行不要にするため。混乱を避けるべく「カテゴリ」タブには
+ * spoiler は基本タブで設定する旨を明記する）。
+ *
+ * 設計方針（phase-3-multilabel.md リスク6 / L1120）: 新カテゴリは
+ * **すべてデフォルト OFF**。既存ユーザーの体験を変えない。
+ */
+export interface CategorySettings {
+  harassment: { enabled: boolean; strength: CategoryStrength };
+  spam: { enabled: boolean };
+  offTopic: { enabled: boolean; strength: CategoryStrength };
+  backseat: { enabled: boolean; strength: CategoryStrength };
+}
+
 export interface CustomNGWord {
   /** 安定した識別子（UUID） */
   id: string;
@@ -50,6 +81,21 @@ export interface Settings {
   customNgWords: CustomNGWord[];
   /** 有効化されているジャンルテンプレートのIDリスト */
   selectedGenreTemplates: string[];
+  /**
+   * Phase 3 マルチラベル新カテゴリ設定（P3-UI-04）。
+   * 既存ユーザーの保存値には存在しないため optional。読み出し時は
+   * {@link DEFAULT_SETTINGS}.categories（全 OFF）とマージされる。
+   */
+  categories?: CategorySettings;
+  /**
+   * 行内トリガ（⋯ ブロック/報告アイコン）の表示モード（B5-fix）。
+   *
+   * B6a typescript: **非 optional**。{@link DEFAULT_SETTINGS} が常時セットし、
+   * settings-loader が読み出し時に必ず DEFAULT とマージする（旧データに
+   * 無くても補完される）ため、型と実体（常に存在）を一致させる。
+   * 補完発動は settings-loader で debug 可視化。
+   */
+  triggerVisibility: TriggerVisibility;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -64,6 +110,15 @@ export const DEFAULT_SETTINGS: Settings = {
   collectionApiUrl: 'https://fresh-chat-keeper-api.playnicelab.workers.dev',
   customNgWords: [],
   selectedGenreTemplates: [],
+  // 新カテゴリはすべてデフォルト OFF（既存挙動を変えない / リスク6 対策）
+  categories: {
+    harassment: { enabled: false, strength: 'standard' },
+    spam: { enabled: false },
+    offTopic: { enabled: false, strength: 'standard' },
+    backseat: { enabled: false, strength: 'standard' },
+  },
+  // B5-fix: 既定は hover_only（YouTube #menu と同挙動。通常は何も出さない）
+  triggerVisibility: 'hover_only',
 };
 
 /** メイン設定のストレージキー。書き込みはポップアップのみ行う。 */

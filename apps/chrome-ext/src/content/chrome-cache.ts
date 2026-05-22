@@ -16,9 +16,10 @@
  *   この時点で互換性を切る
  */
 
+import type { JudgmentLabel } from '@fresh-chat-keeper/shared';
 import type { GameProgress, FilterMode } from '../shared/settings.js';
 
-/** proxy の LLM が返す spoiler_category 値 */
+/** proxy の LLM が返す spoiler_category 値（Phase 2 互換 / 後方互換ブリッジ） */
 export type LLMSpoilerCategory = 'direct_spoiler' | 'foreshadowing_hint' | 'gameplay_hint' | 'safe';
 
 const LLM_CATEGORY_SET = new Set<string>([
@@ -30,12 +31,39 @@ const LLM_CATEGORY_SET = new Set<string>([
 
 export type Stage2Verdict = 'block' | 'allow';
 
+/**
+ * Stage 2 判定結果のキャッシュエントリ。
+ *
+ * Phase 3（v0.4.0）でマルチラベル化:
+ * - `primary` / `labels` が新しい正のフィールド（proxy が `FilterResult.primary`
+ *   `FilterResult.labels` を返す）
+ * - `spoilerCategory` は **後方互換フィールド**。v0.3.x で保存された既存
+ *   `fck_judge_cache` エントリ（primary/labels を持たない）と、proxy の
+ *   後方互換ブリッジ（B3 hardening）経由で来る値を読むために残す。
+ *
+ * すべて optional。判定失敗（LLM エラー / JSON パース失敗）は
+ * `primary` 未設定かつ `spoilerCategory: null` で表す。
+ */
 export interface JudgeCacheEntry {
   /**
-   * LLM が判定したカテゴリ。
-   * null は LLM 判定失敗（API エラー・JSON パース失敗）を表す。
+   * B7: proxy が `context.settings`（カテゴリ ON/OFF・強度）を見て
+   * `primaryToVerdict` で計算済みの最終 verdict。**後方互換 optional**
+   * （B7 以前に保存された旧キャッシュには無い＝従来フォールバックで処理）。
+   * 存在すれば {@link verdictFromCache} はこれを最優先で返す（キャッシュ
+   * 再評価時も proxy 同等の結果になる）。
    */
-  spoilerCategory: LLMSpoilerCategory | null;
+  verdict?: Stage2Verdict;
+  /** Phase 3: 最も深刻な単一ラベル（labels から LABEL_PRECEDENCE で導出済み） */
+  primary?: JudgmentLabel;
+  /** Phase 3: マルチラベルの生結果 */
+  labels?: JudgmentLabel[];
+  /**
+   * 後方互換: Phase 2 までの spoiler サブカテゴリ。
+   * - 旧 `fck_judge_cache` エントリ（primary なし）の読み出し
+   * - proxy 後方互換ブリッジ経由のレスポンス
+   * のために残す。null は LLM 判定失敗。
+   */
+  spoilerCategory?: LLMSpoilerCategory | null;
   confidence?: number;
 }
 
@@ -53,10 +81,53 @@ export type OnStage2Result = (candidate: Stage2Candidate, entry: JudgeCacheEntry
  * キャッシュエントリと現在のフィルタモードから verdict を導出する。
  * フィルタモードを変更しても proxy に再リクエストせずに正しい判定が得られる。
  *
- * - spoilerCategory が null（LLM 判定失敗）の場合: lenient → allow、それ以外 → block
+ * 評価順:
+ * 0. **B7: `entry.verdict` があれば最優先で返す**。proxy が `context.settings`
+ *    のカテゴリ ON/OFF・強度を見て `primaryToVerdict` で計算済みの正しい値
+ *    なので、chrome-ext 側で primary から再計算（＝旧バグで新カテゴリを常に
+ *    allow に倒していた）必要はない。これによりキャッシュ再評価（リロード後
+ *    proxy を叩かずキャッシュから verdict 決定）でも proxy 同等になる。
+ * 1. `entry.verdict` 無し（**B7 以前に保存された旧キャッシュのみ**）→ `primary`:
+ *    - 'safe' → allow / 'spoiler' → block
+ *    - 'harassment'/'spam'/'off_topic'/'backseat' → allow（**従来フォールバック
+ *      を後方互換として維持**。新カテゴリは B7 以降 entry.verdict で正しく
+ *      判定されるため、ここに来るのは verdict 列を持たない旧エントリだけ）
+ * 2. `primary` もなければ後方互換 `spoilerCategory`（旧キャッシュ / proxy
+ *    ブリッジ）。null（判定失敗）は lenient→allow / その他→block
  */
 export function verdictFromCache(entry: JudgeCacheEntry, filterMode: FilterMode): Stage2Verdict {
-  const { spoilerCategory } = entry;
+  // B7: proxy が settings 反映済みで計算した verdict を最優先（出口バグ修正）。
+  if (entry.verdict !== undefined) {
+    return entry.verdict;
+  }
+
+  if (entry.primary !== undefined) {
+    switch (entry.primary) {
+      case 'safe':
+        return 'allow';
+      case 'spoiler':
+        return 'block';
+      case 'harassment':
+      case 'spam':
+      case 'off_topic':
+      case 'backseat':
+        // B7: ここに来るのは **entry.verdict を持たない B7 以前の旧
+        // キャッシュ**のみ（B7 以降の新カテゴリは上の entry.verdict 経路で
+        // proxy の settings 反映済み verdict が返る）。旧エントリは従来動作
+        // ＝allow を維持する（後方互換。リロードで再判定され verdict 付きに
+        // 更新される）。proxy 完璧・出口バグは B7 で entry.verdict 経路に移管済み。
+        return 'allow';
+      default: {
+        // B4a hardening D: コンパイル時網羅チェック。JudgmentLabel に
+        // ラベルを追加して上の case を足し忘れると型エラーになる。
+        const _exhaustive: never = entry.primary;
+        void _exhaustive;
+        return 'allow';
+      }
+    }
+  }
+
+  const spoilerCategory = entry.spoilerCategory ?? null;
   if (spoilerCategory === null) {
     return filterMode === 'lenient' ? 'allow' : 'block';
   }
@@ -81,6 +152,20 @@ export function parseSpoilerCategory(raw: string | undefined | null): LLMSpoiler
   return LLM_CATEGORY_SET.has(raw) ? (raw as LLMSpoilerCategory) : null;
 }
 
+/**
+ * B7: proxy レスポンスの `result.verdict`（`FilterVerdict` =
+ * 'block' | 'allow' | 'uncertain'）を {@link Stage2Verdict} へ正規化する。
+ *
+ * - 'block' / 'allow' → そのまま（proxy が settings 反映済みで計算した値）
+ * - 'uncertain'（LLM 失敗フォールバック）/ 未知値 / null / undefined →
+ *   **undefined**（`JudgeCacheEntry.verdict` に保存せず、従来の primary /
+ *   spoilerCategory フォールバックに委ねる）。"不正値は undefined" 方針。
+ *   degraded レスポンスは sendStage2Batch 側でそもそもキャッシュしない。
+ */
+export function normalizeVerdict(raw: unknown): Stage2Verdict | undefined {
+  return raw === 'block' || raw === 'allow' ? raw : undefined;
+}
+
 // ─── キャッシュ ────────────────────────────────────────────────────────────────
 
 export const JUDGE_CACHE_KEY = 'fck_judge_cache';
@@ -88,11 +173,23 @@ export const JUDGE_CACHE_KEY = 'fck_judge_cache';
 let _cache: Record<string, JudgeCacheEntry> = {};
 let _cacheLoaded = false;
 
-/** 起動時に一度だけ呼び出す。chrome.storage から判定キャッシュをメモリに読み込む。 */
+/**
+ * 起動時に一度だけ呼び出す。chrome.storage から判定キャッシュをメモリに読み込む。
+ * B4a hardening 🟡: chrome.storage 失敗を握り潰さず、失敗時は空キャッシュで
+ * 確定して継続（キャッシュ無し = 都度 Stage 2 判定。フィルタ機能自体は生きる）。
+ */
 export async function initStage2Cache(): Promise<void> {
   if (_cacheLoaded) return;
-  const result = await chrome.storage.local.get(JUDGE_CACHE_KEY);
-  _cache = (result[JUDGE_CACHE_KEY] as Record<string, JudgeCacheEntry> | undefined) ?? {};
+  try {
+    const result = await chrome.storage.local.get(JUDGE_CACHE_KEY);
+    _cache = (result[JUDGE_CACHE_KEY] as Record<string, JudgeCacheEntry> | undefined) ?? {};
+  } catch (err) {
+    console.error(
+      '[FreshChatKeeper] Stage 2 キャッシュの読み込みに失敗（空キャッシュで継続）:',
+      err,
+    );
+    _cache = {};
+  }
   _cacheLoaded = true;
 }
 
@@ -101,13 +198,32 @@ export function getCachedVerdict(cacheKey: string): JudgeCacheEntry | null {
   return _cache[cacheKey] ?? null;
 }
 
-/** 判定結果をメモリキャッシュと chrome.storage の両方に保存する。 */
+/**
+ * 判定結果をメモリキャッシュと chrome.storage の両方に保存する。
+ *
+ * B5 silent-failure hardening: chrome.storage.local.set 失敗を握り潰さない。
+ * メモリキャッシュは更新済みなので当該タブでは判定が効くが、永続化に失敗
+ * したことを warn で可視化し boolean で呼び出し側へ返す（リロード後に再判定
+ * になることの調査手掛かりを残す）。throw しないのは 1 件の保存失敗で
+ * バッチ全体（onResult 適用）を巻き込まないため。
+ *
+ * @returns 永続化に成功したら true、失敗したら false（メモリには反映済み）
+ */
 export async function saveJudgeCacheEntry(
   cacheKey: string,
   entry: JudgeCacheEntry,
-): Promise<void> {
+): Promise<boolean> {
   _cache[cacheKey] = entry;
-  await chrome.storage.local.set({ [JUDGE_CACHE_KEY]: _cache });
+  try {
+    await chrome.storage.local.set({ [JUDGE_CACHE_KEY]: _cache });
+    return true;
+  } catch (err) {
+    console.warn(
+      '[FreshChatKeeper] Stage 2 キャッシュの永続化に失敗（メモリのみ反映、リロードで再判定）:',
+      err,
+    );
+    return false;
+  }
 }
 
 /**

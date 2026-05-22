@@ -14,6 +14,7 @@ export type {
   FilterVerdict,
   FilterMode,
   UserProgress,
+  JudgmentLabel,
 } from "./types/chat.js";
 
 export type {
@@ -22,7 +23,7 @@ export type {
   Result,
 } from "./types/api.js";
 
-export type { MisreportEntry } from "./types/misreport.js";
+export type { MisreportEntry, ReportedLabel } from "./types/misreport.js";
 
 export type {
   CollectionLabel,
@@ -47,6 +48,8 @@ export type {
 export type {
   FilterSettings,
   FilterSettingsV1,
+  FilterSettingsV2,
+  FilterSettingsV3,
   GameContext,
 } from "./types/settings.js";
 
@@ -56,7 +59,11 @@ export type {
   BackgroundFetchResponse,
 } from "./types/background-messaging.js";
 
-export { migrateSettings } from "./settings-migration.js";
+export {
+  migrateSettings,
+  SETTINGS_V1_BACKUP_KEY,
+  SETTINGS_V2_BACKUP_KEY,
+} from "./settings-migration.js";
 
 export { ok, err } from "./types/api.js";
 

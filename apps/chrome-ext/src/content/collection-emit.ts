@@ -49,7 +49,7 @@ export interface EmitJudgmentInput {
   labels: CollectionLabel[];
   primaryLabel: CollectionLabel;
   confidence: number;
-  stage: 'stage1' | 'stage2';
+  stage: 'stage1' | 'stage1_5' | 'stage2';
   reasonJa: string | null;
 
   labelSource: LabelSource;

@@ -17,17 +17,26 @@ import type {
   JudgeResponse,
   FilterSettings,
   GameContext,
+  JudgmentLabel as SharedJudgmentLabel,
 } from '@fresh-chat-keeper/shared';
 
 /**
  * 判定ラベル。1メッセージにつき複数のラベルが付与されうる（マルチラベル）。
  *
- * Phase 2 時点では `'safe' | 'spoiler'` のみ。
+ * Phase 3（v0.4.0）で 6 ラベルに拡張。設計詳細は
+ * `dev-docs/phase-3-multilabel.md` 「判定カテゴリの定義」を参照。
  *
- * @todo Phase 3: `'harassment' | 'spam' | 'off_topic' | 'backseat'` を追加し、
- *   暴言・スパム・話題逸脱・指示厨の判定を統合する
+ * primary 決定の優先順位（深刻度の高い順）:
+ *   harassment > spoiler > backseat > spam > off_topic > safe
+ *
+ * canonical な定義は `@fresh-chat-keeper/shared`。judgment-engine からも
+ * 同名で再エクスポートしているので、既存の import 文（judgment-engine 経由）は
+ * 互換性のために維持される。
+ *
+ * Phase 2.5 のデータ収集ログ（`CollectionLabel`）とは同じ値集合に揃えてある
+ * ので、相互変換は不要。
  */
-export type JudgmentLabel = 'safe' | 'spoiler';
+export type JudgmentLabel = SharedJudgmentLabel;
 
 /**
  * 判定エンジンに入力するチャットメッセージの正規化表現。

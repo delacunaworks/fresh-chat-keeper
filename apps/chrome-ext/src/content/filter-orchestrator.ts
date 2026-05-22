@@ -21,11 +21,13 @@ import { getAllGenreTemplates } from '@fresh-chat-keeper/knowledge-base';
 import { createChromeTransport } from './chrome-transport.js';
 import {
   parseSpoilerCategory,
+  normalizeVerdict,
   saveJudgeCacheEntry,
   type JudgeCacheEntry,
   type OnStage2Result,
   type Stage2Candidate,
 } from './chrome-cache.js';
+import type { JudgmentLabel } from '@fresh-chat-keeper/shared';
 
 /**
  * バッチ（最大5件）をプロキシに送信し、結果を onResult コールバックで返す。
@@ -59,24 +61,80 @@ export async function sendStage2Batch(
     return false;
   }
 
+  // B4a: proxy が degraded（Stage 2 パース失敗でリトライしてもなお全件 safe）
+  // を返した場合、その safe を永続キャッシュしない。次回バッチ/リロードで
+  // 再判定する余地を残す（phase-3-multilabel.md §追補 2）。その場の verdict は
+  // onResult 経由で適用される（safe = 通す）。
+  const degraded = response.degraded === true;
+
   for (const result of response.results) {
     const idx = parseInt(result.messageId, 10);
     const candidate = batch[idx];
     if (!candidate) continue;
 
-    const spoilerCategory = parseSpoilerCategory(result.spoilerCategory);
+    // Phase 3: proxy は labels/primary を返す（FilterResult 拡張）。
+    // 旧 proxy 互換のため spoilerCategory も後方互換ブリッジで届くので、
+    // primary が無いレスポンス（理論上は無いが念のため）は spoilerCategory に
+    // フォールバックする。両方無ければ判定失敗扱い（spoilerCategory: null）。
+    const primary = sanitizeLabel(result.primary);
+    const labels = sanitizeLabels(result.labels);
+    // B7: proxy は context.settings（カテゴリ ON/OFF・強度）を見て
+    // primaryToVerdict で算出済みの verdict を返す。これを保存し
+    // verdictFromCache に最優先で使わせる（旧コードは verdict を捨て
+    // primary から再計算し新カテゴリを常に allow に倒していた）。
+    const verdict = normalizeVerdict(result.verdict);
     const entry: JudgeCacheEntry = {
-      spoilerCategory,
+      ...(verdict ? { verdict } : {}),
+      ...(primary ? { primary } : {}),
+      ...(labels.length > 0 ? { labels } : {}),
+      spoilerCategory: parseSpoilerCategory(result.spoilerCategory),
       ...(result.confidence !== undefined ? { confidence: result.confidence } : {}),
     };
 
     // verdict 計算は archive.ts 側で applyStage2Verdict が verdictFromCache を呼ぶ。
-    // ここではキャッシュ保存と onResult 通知のみ行う。
-    await saveJudgeCacheEntry(candidate.cacheKey, entry);
+    // degraded のときは保存をスキップ（再判定余地を残す）。onResult はその場の
+    // verdict 適用のため degraded でも必ず呼ぶ。
+    // B5 silent-failure hardening: saveJudgeCacheEntry は永続化失敗を boolean で
+    // 返し内部で warn 済み。false（永続化失敗）でもメモリには反映されており
+    // その場の verdict は onResult で適用するため、ここでは degraded 同様
+    // 「リロードで再判定」に格下げするだけで処理は継続する（warn は出力済み）。
+    if (!degraded) {
+      const persisted = await saveJudgeCacheEntry(candidate.cacheKey, entry);
+      if (!persisted) {
+        console.debug(
+          `[FreshChatKeeper] Stage 2 判定 "${candidate.cacheKey}" は永続化失敗。` +
+            `当該タブではメモリキャッシュで動作、リロード後は再判定。`,
+        );
+      }
+    }
     onResult(candidate, entry);
   }
 
   return true;
+}
+
+// ─── マルチラベル sanitize ─────────────────────────────────────────────────
+
+const VALID_LABEL_SET = new Set<JudgmentLabel>([
+  'safe',
+  'spoiler',
+  'harassment',
+  'spam',
+  'off_topic',
+  'backseat',
+]);
+
+/** proxy レスポンスの primary を JudgmentLabel に narrowing（不正値は undefined）。 */
+function sanitizeLabel(raw: unknown): JudgmentLabel | undefined {
+  return typeof raw === 'string' && VALID_LABEL_SET.has(raw as JudgmentLabel)
+    ? (raw as JudgmentLabel)
+    : undefined;
+}
+
+/** proxy レスポンスの labels[] を JudgmentLabel[] に narrowing（不正要素は除外）。 */
+function sanitizeLabels(raw: unknown): JudgmentLabel[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((l): l is JudgmentLabel => sanitizeLabel(l) !== undefined);
 }
 
 // ─── ペイロード構築（新形式: context + tier）─────────────────────────────────
@@ -87,14 +145,17 @@ function buildJudgeRequestPayload(
   videoTitle: string | undefined,
 ): JudgeRequestPayload {
   const context = buildJudgmentContext(settings, videoTitle);
-  return {
+  // B4a: shared JudgeRequest に context?/tier? を後方互換追加したので
+  // `as JudgeRequestPayload` キャスト不要（型のまま構築できる）。
+  const payload: JudgeRequestPayload = {
     messages: batch.map((c, i) => ({ id: String(i), text: c.text })),
     context: {
-      game: context.game,
+      ...(context.game ? { game: context.game } : {}),
       settings: context.settings,
     },
     tier: 'free',
-  } as JudgeRequestPayload;
+  };
+  return payload;
 }
 
 /**
@@ -108,8 +169,13 @@ function buildJudgmentContext(settings: Settings, videoTitle: string | undefined
   const isKBGame = settings.gameId !== 'none' && settings.gameId !== 'other';
   const game = buildGameContext(settings, isKBGame, videoTitle);
 
+  // Phase 3 / v3: canonical FilterSettings は v3 形式（マルチラベル + userBlocks）。
+  // chrome-ext 内部の {@link Settings} には新カテゴリの ON/OFF を保持する UI が
+  // まだ存在しない（B3 で追加予定）ので、ここでは spoiler のみアクティブな v3 を
+  // 構築する。新カテゴリ optional は未指定のまま渡しても judgment-engine 側で
+  // 安全に扱える（runStage1_5 は categories.spam?.enabled === true でのみ発火）。
   const filterSettings: FilterSettings = {
-    version: 2,
+    version: 3,
     enabled: settings.enabled,
     displayMode: settings.displayMode,
     filterMode: 'archive', // v2 の filterMode は archive/live。既存 chrome-ext には対応情報なし → archive 既定
@@ -118,6 +184,17 @@ function buildJudgmentContext(settings: Settings, videoTitle: string | undefined
         enabled: true,
         strength: legacyFilterModeToStrength(settings.filterMode),
       },
+      // P3-UI-04: 新カテゴリは chrome-ext Settings.categories（カテゴリタブ）
+      // から map。未設定（旧ユーザー）は全 OFF。proxy 側 primaryToVerdict が
+      // これを見て block/allow を決める。
+      ...(settings.categories
+        ? {
+            harassment: settings.categories.harassment,
+            spam: settings.categories.spam,
+            offTopic: settings.categories.offTopic,
+            backseat: settings.categories.backseat,
+          }
+        : {}),
     },
     customBlockWords: settings.customNgWords
       .filter((w) => w.enabled)

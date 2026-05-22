@@ -11,6 +11,10 @@
     "./stage1": {
       "import": "./dist/stage1/index.js",
       "types": "./dist/stage1/index.d.ts"
+    },
+    "./stage1_5": {
+      "import": "./dist/stage1_5/index.js",
+      "types": "./dist/stage1_5/index.d.ts"
     }
   },
   "main": "./dist/index.js",

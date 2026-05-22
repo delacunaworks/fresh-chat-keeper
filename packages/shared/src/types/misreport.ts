@@ -1,4 +1,19 @@
-import type { UserProgress } from './chat.js';
+import type { UserProgress, JudgmentLabel } from './chat.js';
+
+/**
+ * 視聴者が誤判定報告で選べる「本来のラベル」。
+ *
+ * - `safe` は除外する: 「本来 safe だった」= 誤ブロック(FP)であり、それは
+ *   `reportKind: 'false_positive'` で表現する。FN（見逃し）の reportedLabel に
+ *   safe は意味的にあり得ないため、型で `Exclude<JudgmentLabel, 'safe'>` する
+ * - `unknown` =「わからない・その他」（種別は付けたいが分類できない）
+ * - 「スキップ（種別なしで報告のみ）」は reportedLabel を **undefined** で表す
+ *   （`unknown` とは区別する。undefined=スキップ, 'unknown'=わからない）
+ *
+ * B5 typescript hardening: report-form.ts の独自宣言を shared に昇格し、
+ * 'safe' 混入を型で排除して chrome-ext / report UI で単一の真実にする。
+ */
+export type ReportedLabel = Exclude<JudgmentLabel, 'safe'> | 'unknown';
 
 /**
  * ユーザーが「誤判定」と報告したコメントの記録。
@@ -28,4 +43,22 @@ export interface MisreportEntry {
   synced?: boolean;
   /** 送信時にクライアントが発行した SpoilerJudgmentLog.logId（UUID v4） */
   syncedLogId?: string;
+
+  // ─── Phase 3 拡張（v0.4.0 / P3-UI-06、optional で破壊的変更なし）────────
+  /**
+   * 報告種別。表示状態から自動判定する:
+   * - `false_positive`: フィルタ済みコメントを「誤ブロック」と報告（従来の misreport）
+   * - `false_negative`: 表示中コメントを「フィルタすべきだった」と報告（新規）
+   *
+   * 既存ユーザーの保存値は undefined。読み出し側は undefined を
+   * `false_positive` とみなす（従来の misreport は誤ブロック専用だったため）。
+   */
+  reportKind?: 'false_positive' | 'false_negative';
+  /**
+   * 視聴者が選んだ「本来のラベル」（{@link ReportedLabel}）。
+   * `unknown` =「わからない・その他」。「スキップ（種別なしで報告のみ）」
+   * 選択時は undefined（`unknown` と区別する）。`safe` は型で排除済み
+   * （誤ブロックは reportKind='false_positive' で表す）。
+   */
+  reportedLabel?: ReportedLabel;
 }

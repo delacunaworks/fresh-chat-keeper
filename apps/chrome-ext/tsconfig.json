@@ -9,6 +9,7 @@
       "@fresh-chat-keeper/shared": ["../../packages/shared/src/index.ts"],
       "@fresh-chat-keeper/knowledge-base": ["../../packages/knowledge-base/src/index.ts"],
       "@fresh-chat-keeper/judgment-engine": ["../../packages/judgment-engine/src/index.ts"],
+      "@fresh-chat-keeper/judgment-engine/stage1_5": ["../../packages/judgment-engine/src/stage1_5/index.ts"],
       "@fresh-chat-keeper/judgment-engine/stage1": ["../../packages/judgment-engine/src/stage1/index.ts"],
       "@kb-data/*": ["../../packages/knowledge-base/data/*"]
     }

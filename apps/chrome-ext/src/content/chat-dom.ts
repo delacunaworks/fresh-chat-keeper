@@ -15,20 +15,10 @@ export const ATTR_FALSE_POSITIVE = 'data-fck-false-positive';
 
 const PLACEHOLDER = '⚠ ネタバレの可能性があるためフィルタされました（クリックで表示）';
 
-const MISREPORT_BTN_STYLE = [
-  'margin-left:6px',
-  'font-size:0.75em',
-  'cursor:pointer',
-  'opacity:0.65',
-  'background:none',
-  'border:1px solid currentColor',
-  'border-radius:3px',
-  'color:inherit',
-  'padding:0 4px',
-  'vertical-align:middle',
-  'white-space:nowrap',
-  'line-height:1.4',
-].join(';');
+// P3-UI-06: 誤判定報告はアクションバー ⚠️ に一本化。プレースホルダー経由の
+// 旧 FP 報告ボタン（MISREPORT_BTN_STYLE / createMisreportButton / onMisreport）は
+// 廃止した。ATTR_FALSE_POSITIVE 自体は processMessage の再フィルタ抑止ガードと
+// して残置（現状セッターは無いが将来再利用余地。dead だが無害）。
 
 /**
  * 要素ごとに登録済みのトグルリスナーを管理する。
@@ -52,7 +42,6 @@ export function filterMessageElement(
   matchedKeyword?: string,
   matchedContext?: string,
   onReveal?: () => void,
-  onMisreport?: () => void,
 ): void {
   if (el.getAttribute(ATTR_FILTERED) === 'true') return;
 
@@ -68,7 +57,7 @@ export function filterMessageElement(
   }
 
   if (displayMode === 'hidden') {
-    // 行コンテナを非表示にする（誤判定ボタンは表示しない）
+    // 行コンテナを非表示にする
     const row =
       el.closest('yt-live-chat-text-message-renderer') ??
       el.closest('yt-live-chat-paid-message-renderer') ??
@@ -78,7 +67,7 @@ export function filterMessageElement(
       (row as HTMLElement).style.display = 'none';
     }
   } else {
-    setupPlaceholderToggle(el, originalText, onReveal, onMisreport);
+    setupPlaceholderToggle(el, originalText, onReveal);
   }
 }
 
@@ -112,7 +101,7 @@ export function switchDisplayMode(el: Element, nextMode: DisplayMode, onReveal?:
     const originalText = el.textContent ?? '';
 
     // 先にテキストをプレースホルダーに書き換えてから行を表示（表示瞬間のチラつき防止）
-    setupPlaceholderToggle(el, originalText, onReveal, undefined);
+    setupPlaceholderToggle(el, originalText, onReveal);
 
     const hiddenRow = el.closest(`[${ATTR_HIDDEN_ROW}]`);
     if (hiddenRow) {
@@ -184,7 +173,6 @@ function setupPlaceholderToggle(
   el: Element,
   originalText: string,
   onReveal?: () => void,
-  onMisreport?: () => void,
 ): void {
   // 既存のトグルリスナーを解除してから再設定
   abortToggleListener(el);
@@ -208,11 +196,8 @@ function setupPlaceholderToggle(
   hideBtn.style.display = 'none';
   el.appendChild(hideBtn);
 
-  // 誤判定ボタンとその状態（クロージャで保持）
-  let misreportBtn: HTMLButtonElement | null = null;
-  let reported = el.getAttribute(ATTR_FALSE_POSITIVE) === 'true';
-
   // プレースホルダークリック: filtered → revealed
+  // P3-UI-06: 誤判定報告ボタンはここに生やさない（アクションバー ⚠️ に一本化）。
   textSpan.addEventListener('click', (e: Event) => {
     e.stopPropagation();
     if (el.getAttribute(ATTR_FILTERED) !== 'true') return;
@@ -223,19 +208,6 @@ function setupPlaceholderToggle(
     hideBtn.style.display = '';
     el.setAttribute(ATTR_FILTERED, 'revealed');
     onReveal?.();
-
-    if (onMisreport) {
-      if (!misreportBtn) {
-        misreportBtn = createMisreportButton(reported, () => {
-          reported = true;
-          el.setAttribute(ATTR_FALSE_POSITIVE, 'true');
-          onMisreport();
-        });
-        el.appendChild(misreportBtn);
-      } else {
-        misreportBtn.style.display = '';
-      }
-    }
   }, { signal: ctrl.signal });
 
   // 「🔒 伏せる」クリック: revealed → filtered
@@ -247,38 +219,8 @@ function setupPlaceholderToggle(
     (textSpan as HTMLElement).style.cursor = 'pointer';
     (textSpan as HTMLElement).style.opacity = '0.55';
     hideBtn.style.display = 'none';
-    if (misreportBtn) misreportBtn.style.display = 'none';
     el.setAttribute(ATTR_FILTERED, 'true');
   }, { signal: ctrl.signal });
-}
-
-/** 誤判定ボタン要素を生成する */
-function createMisreportButton(
-  alreadyReported: boolean,
-  onReport: () => void,
-): HTMLButtonElement {
-  const btn = document.createElement('button');
-  btn.setAttribute('data-fck-misreport', 'true');
-  btn.style.cssText = MISREPORT_BTN_STYLE;
-
-  if (alreadyReported) {
-    btn.textContent = '✓ 報告済み';
-    btn.disabled = true;
-    btn.style.cursor = 'default';
-    btn.style.opacity = '0.45';
-  } else {
-    btn.textContent = '❌ 誤判定';
-    btn.addEventListener('click', (e: Event) => {
-      e.stopPropagation();
-      btn.textContent = '✓ 報告済み';
-      btn.disabled = true;
-      btn.style.cursor = 'default';
-      btn.style.opacity = '0.45';
-      onReport();
-    }, { once: true });
-  }
-
-  return btn;
 }
 
 /** 登録済みのトグルリスナーを解除する */

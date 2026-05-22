@@ -67,14 +67,29 @@ export interface ContextMessage {
   timestamp: string;
 }
 
-/** ユーザーフィードバック（誤判定報告）。Phase 2.5 では失敗カテゴリは簡易選択肢のみ */
+/** ユーザーフィードバック（誤判定報告）。Phase 3（P3-UI-06）で値域を拡張 */
 export interface UserFeedbackPayload {
   /** 報告日時（ISO 8601） */
   reportedAt: string;
-  /** 視聴者が考える正しいラベル */
-  correctLabel: 'spoiler' | 'safe' | 'unknown';
-  /** 失敗カテゴリ（簡易選択肢） 【P3+ で拡張】 */
+  /**
+   * 視聴者が考える正しいラベル。
+   * Phase 2.5 は 'spoiler'|'safe'|'unknown' のみだったが、Phase 3 で
+   * 6 ラベル + 'unknown' に拡張（後方互換: 旧値は部分集合）。
+   * - FP 報告（誤ブロック）: 'safe'（本来フィルタ不要だった）
+   * - FN 報告（見逃し）: 視聴者が選んだ本来のラベル / 'unknown'
+   *   （phase-3-multilabel.md §実装中の設計改訂 3、phase-2-5 §102 実施）
+   */
+  correctLabel: CollectionLabel | 'unknown';
+  /**
+   * 失敗カテゴリ。Phase 3 で新カテゴリ体系へ拡張（後方互換: 旧簡易値も許容）。
+   * - Phase 3 新体系: 6 ラベル + 'unknown'（reportedLabel に対応）
+   * - Phase 2.5 旧簡易値: background_detail / external_reference /
+   *   prediction / metaphor / other（保存済みデータ互換のため残置）
+   * - スキップ（種別なし報告）/ 未分類: null
+   */
   failureCategory:
+    | CollectionLabel
+    | 'unknown'
     | 'background_detail'
     | 'external_reference'
     | 'prediction'

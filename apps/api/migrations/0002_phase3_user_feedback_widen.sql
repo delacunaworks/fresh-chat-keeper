@@ -1,0 +1,31 @@
+-- Migration 0002: Phase 3（P3-UI-06）誤判定報告フィードバックの値域拡大
+--
+-- 背景:
+--   Phase 2.5 の UserFeedbackPayload.correctLabel は 'spoiler'|'safe'|'unknown'、
+--   failureCategory は background_detail/external_reference/prediction/metaphor/
+--   other/null の簡易選択肢のみだった（phase-2-5-data-collection.md §102）。
+--   Phase 3（P3-UI-06）で誤判定報告を FP/FN 一本化し、視聴者がカテゴリ
+--   （ネタバレ/暴言/スパム/無関係/指示厨/わからない・その他/スキップ）を選べる
+--   ようにしたため、correctLabel を 6 ラベル + 'unknown' に、failureCategory を
+--   新カテゴリ体系（6 ラベル + 'unknown' + 旧簡易値 + null）へ拡大する。
+--
+-- スキーマ上の措置:
+--   correctLabel / failureCategory は judgment_logs.user_feedback_json
+--   （TEXT、`CHECK (user_feedback_json IS NULL OR json_valid(...))` のみ）の
+--   **内部値**であり、値レベルの SQL CHECK 制約は存在しない。したがって
+--   値域拡大に DDL は不要で、本マイグレーションはスキーマを変更しない
+--   （後方互換: 旧データ・旧値はそのまま有効）。
+--
+--   このファイルは「Phase 3 で許容値域を拡げた」ことをマイグレーション履歴に
+--   明示し、将来 user_feedback の内部値に CHECK / 生成列を導入する場合の
+--   起点を残すための **記録用マイグレーション**である。適用しても既存スキーマ・
+--   データには一切影響しない（no-op）。本番適用は DEPLOY-01（B5）で 0001 と
+--   合わせて行う。
+--
+-- 検証:
+--   apps/api の schema.test.ts が Phase 3 拡大値（例:
+--   correctLabel='harassment', failureCategory='backseat'）の round-trip を
+--   カバーする。json_valid CHECK のみのため拡大値も問題なく保存・復元される。
+
+-- 値変更なし（記録用マイグレーション）。あえて副作用のない PRAGMA を置く。
+PRAGMA user_version = 2;

@@ -19,7 +19,7 @@ import type { FilterSettings, GameContext } from '@fresh-chat-keeper/shared';
 // ─── ヘルパー ──────────────────────────────────────────────
 function buildSettings(overrides?: Partial<FilterSettings>): FilterSettings {
   return {
-    version: 2,
+    version: 3,
     enabled: true,
     displayMode: 'placeholder',
     filterMode: 'archive',
