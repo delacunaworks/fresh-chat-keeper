@@ -27,5 +27,10 @@
 --   correctLabel='harassment', failureCategory='backseat'）の round-trip を
 --   カバーする。json_valid CHECK のみのため拡大値も問題なく保存・復元される。
 
--- 値変更なし（記録用マイグレーション）。あえて副作用のない PRAGMA を置く。
-PRAGMA user_version = 2;
+-- 値変更なし（記録用マイグレーション）。Cloudflare D1 はユーザー SQL から
+-- `PRAGMA user_version = N;` のような書き込み PRAGMA を許可しない
+-- （SQLITE_AUTH 7500 で拒否される）ため、完全無害な `SELECT 1;` を置く。
+-- migration 履歴テーブル (`d1_migrations`) への適用記録は wrangler が
+-- 自動で行うため、この no-op 文だけで「Phase 3 値域拡大の境界線」を
+-- 履歴に刻む目的は達成できる。
+SELECT 1;
