@@ -79,8 +79,8 @@ describe('settings-loader: v4 そのまま読み出し', () => {
     fake.store.set(STORAGE_KEY, stored);
     const loaded = await loadSettings();
     expect(loaded.userFlagging).toEqual(DEFAULT_SETTINGS.userFlagging);
-    expect(loaded.userFlagging?.enabled).toBe(false);
-    expect(loaded.userFlagging?.scope).toBe('30d');
+    expect(loaded.userFlagging.enabled).toBe(false);
+    expect(loaded.userFlagging.scope).toBe('30d');
   });
 });
 

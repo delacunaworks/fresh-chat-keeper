@@ -128,12 +128,15 @@ export interface Settings {
    */
   triggerVisibility: TriggerVisibility;
   /**
-   * Phase 3.5 視聴者フラグ機能の設定（B3 / v0.5.0）。
-   * 既存ユーザーの保存値（v3 以前）には存在しないため optional。読み出し時は
-   * {@link DEFAULT_SETTINGS}.userFlagging（既定 OFF）と stripVersion 内で
-   * マージされる（categories と同パターン）。
+   * Phase 3.5 視聴者フラグ機能の設定（B3 / v0.5.0、B5 で非 optional 化）。
+   *
+   * B5 typescript（B6a triggerVisibility と同パターン）: 非 optional。
+   * {@link DEFAULT_SETTINGS}.userFlagging が常時セットされ、settings-loader が
+   * 読み出し時に必ず DEFAULT とマージする（旧 v3 以前データに無くても補完される）
+   * ため、型と実体（常に存在）を一致させる。呼び出し側の
+   * `settings.userFlagging?.enabled` ノイズが消える。
    */
-  userFlagging?: UserFlaggingSettings;
+  userFlagging: UserFlaggingSettings;
 }
 
 export const DEFAULT_SETTINGS: Settings = {

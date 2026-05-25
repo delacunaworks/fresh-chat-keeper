@@ -20,7 +20,10 @@
  * `document.title`。`window` 直接参照は polling timer のみ。
  */
 
-import { getChannelIdFromDom } from '../author-extract.js';
+import {
+  getChannelIdFromDom,
+  getStreamerDisplayName,
+} from '../author-extract.js';
 import { SessionTracker } from './session-tracker.js';
 
 /** polling 周期（ミリ秒）。設計判断は JSDoc 冒頭参照。 */
@@ -104,22 +107,15 @@ function checkAndApply(): void {
 }
 
 /**
- * `document.title` から動画タイトル部分を取り出し、配信者表示名の暫定値とする。
- * YouTube のタイトルは `"<動画タイトル> - YouTube"` 形式。動画タイトルが配信者名と
- * 一致するわけではないが、B5/B7 で正確な値を取り直すまでの placeholder として十分。
+ * 配信者表示名を抽出する thin wrapper。実装は author-extract.ts の
+ * {@link getStreamerDisplayName} に集約（DOM 抽出ロジックの単一の真実）。
+ *
+ * B4 時点の旧実装は `document.title` 直接参照で chat iframe context では
+ * 空文字を返していた。B5 で `window.parent?.document` 経由の helper に
+ * 寄せたことで、iframe / parent どちらの context でも動くようになった。
  */
 function extractStreamerDisplayName(): string {
-  try {
-    // node / 非ブラウザ環境で window / document が未定義のときは catch に落とす。
-    // typeof チェックを噛ませてグローバル参照の ReferenceError を回避する。
-    const w = typeof window !== 'undefined' ? window : undefined;
-    const d = typeof document !== 'undefined' ? document : undefined;
-    const title = w?.parent?.document?.title ?? d?.title ?? '';
-    // 末尾 " - YouTube" を除去（trim 込み）。タイトル全体が "YouTube" なら空に倒す
-    return title.replace(/\s*-\s*YouTube\s*$/, '').trim();
-  } catch {
-    return '';
-  }
+  return getStreamerDisplayName();
 }
 
 // ─── テスト用 ───────────────────────────────────────────────────

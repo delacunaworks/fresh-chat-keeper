@@ -48,8 +48,10 @@ export async function resolveFlagLevel(
   sessionTracker: SessionTracker,
   now: Date = new Date(),
 ): Promise<FlagEvaluationResult> {
+  // userFlagging は B5 で非 optional 化されたが、popup から書き戻された素の
+  // 値が型上欠落しているケース（古い popup 経路 / 手動編集）に備え optional
+  // chaining で扱う。欠落なら clean を即返す（破壊的に動かない）。
   const flagging = settings.userFlagging;
-  // userFlagging 未設定（旧データ migration 漏れの保険）でも壊さず clean を返す
   if (!flagging) {
     return cleanResult();
   }

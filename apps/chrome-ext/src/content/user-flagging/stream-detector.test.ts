@@ -115,19 +115,21 @@ describe('stream-detector', () => {
     expect(firstHandle).toBe(secondHandle);
   });
 
-  it('displayName は document.title から "- YouTube" 除去で抽出', () => {
-    // chrome-ext の vitest 環境は node 既定（jsdom 非導入）なので document を
-    // globalThis に手動スタブする。
-    const g = globalThis as unknown as { document?: { title: string } };
-    const prev = g.document;
-    g.document = { title: 'すごいゲーム実況 - YouTube' };
+  it('displayName は getStreamerDisplayName helper 経由で取得される（B5 supplement）', async () => {
+    // B5 で stream-detector の displayName 抽出は author-extract の
+    // getStreamerDisplayName に寄せた。chat iframe context でも parent から取れる
+    // よう window.parent?.document 経由になっており、node 環境では catch で空文字に
+    // 倒れる。本テストでは helper を spy して期待戻り値を流し込む。
+    const authorExtract = await import('../author-extract.js');
+    const displayNameSpy = vi
+      .spyOn(authorExtract, 'getStreamerDisplayName')
+      .mockReturnValue('すごいゲーム実況');
     try {
       getChannelIdSpy.mockReturnValue('UC_a');
       initStreamDetector(tracker);
       expect(getCurrentStreamerDisplayName()).toBe('すごいゲーム実況');
     } finally {
-      if (prev === undefined) delete g.document;
-      else g.document = prev;
+      displayNameSpy.mockRestore();
     }
   });
 });

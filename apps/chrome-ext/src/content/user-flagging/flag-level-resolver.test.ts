@@ -261,9 +261,14 @@ describe('resolveFlagLevel', () => {
     expect(result.level).toBe('grey');
   });
 
-  it('userFlagging 未設定 → clean / 例外を投げない', async () => {
-    const settingsNoFlagging: Settings = { ...DEFAULT_SETTINGS };
-    delete (settingsNoFlagging as Settings & { userFlagging?: unknown }).userFlagging;
+  it('userFlagging 未設定（旧 popup / 手動編集データ）→ clean / 例外を投げない', async () => {
+    // B5 で型上は非 optional に進めたが、popup から書き戻された素データに
+    // userFlagging が欠落しているケースの defensive 経路を保護。
+    // 型システム的には Settings は userFlagging を必須にしているが、
+    // ランタイムでは欠落しうるので Omit してから Settings に戻す。
+    const { userFlagging: _omit, ...rest } = DEFAULT_SETTINGS;
+    void _omit;
+    const settingsNoFlagging = rest as unknown as Settings;
 
     const result = await resolveFlagLevel(STREAMER, USER, settingsNoFlagging, tracker, NOW);
     expect(result.level).toBe('clean');

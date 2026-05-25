@@ -67,7 +67,7 @@ export function initAggregator(
   tracker: SessionTracker,
 ): void {
   sessionTracker = tracker;
-  enabledCached = initialSettings.userFlagging?.enabled === true;
+  enabledCached = initialSettings.userFlagging.enabled;
 
   if (storageListenerInstalled) return;
   storageListenerInstalled = true;
@@ -75,6 +75,9 @@ export function initAggregator(
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'local' || !changes[STORAGE_KEY]) return;
     const next = changes[STORAGE_KEY].newValue as Settings | undefined;
+    // chrome.storage.onChanged の newValue は loadSettings の DEFAULT マージを
+    // 経ない素のオブジェクトなので、userFlagging が欠落しているケースに optional
+    // chaining で備える（型上は非 optional だが保存値は古いことがある）
     enabledCached = next?.userFlagging?.enabled === true;
   });
 }

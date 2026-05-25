@@ -154,6 +154,73 @@ export function extractChannelIdFromHref(href: string | undefined | null): strin
 }
 
 /**
+ * チャットメッセージ要素から投稿者の**表示名**を抽出する。
+ *
+ * `getAuthorChannelIdFromElement` と同じく `#author-name` の直下 textNode のみ
+ * （`#prepend-chat-badges` / `#chip-badges` 等の子要素を除外）から取り出す。
+ * 2026-05 仕様では channelId == display 文字列（@handle）になることが多いが、
+ * 「表示名」と「識別子」は別概念として将来分岐する可能性があるため別関数とする。
+ *
+ * Phase 3.5 B5 で B4 の集計時 displayName 取得に使用。
+ */
+export function getAuthorDisplayNameFromElement(messageEl: Element): string {
+  const renderer =
+    messageEl.closest('yt-live-chat-text-message-renderer') ??
+    messageEl.closest('yt-live-chat-paid-message-renderer') ??
+    messageEl;
+  const authorNameEl = renderer.querySelector('#author-name');
+  if (!authorNameEl) return '';
+  return extractDirectText(authorNameEl).trim();
+}
+
+/**
+ * 配信者の**表示名**を親ページから抽出する。content script が chat iframe で
+ * 動いているため `window.parent?.document` 経由で漁る（getChannelIdFromDom と同パターン）。
+ *
+ * 抽出順:
+ * 1. `ytd-channel-name` 内の表示名要素（`#text` ないし `a` のテキスト）
+ * 2. `#owner` 配下のチャンネル名 anchor のテキスト
+ * 3. `document.title` から ` - YouTube` を除去（video title fallback）
+ * 4. すべて失敗で空文字
+ *
+ * Phase 3.5 B5 で stream-detector が表示名を持てるよう新設。
+ */
+export function getStreamerDisplayName(): string {
+  try {
+    const doc = window.parent?.document ?? (typeof document !== 'undefined' ? document : null);
+    if (!doc) return '';
+
+    // 1. ytd-channel-name の表示名（yt-formatted-string / a / #text を順に拾う）
+    const channelNameEl = doc.querySelector('ytd-channel-name');
+    if (channelNameEl) {
+      const inner =
+        channelNameEl.querySelector('#text a') ??
+        channelNameEl.querySelector('#text') ??
+        channelNameEl.querySelector('a');
+      const text = inner?.textContent?.trim();
+      if (text) return text;
+    }
+
+    // 2. #owner / #owner-text 配下の anchor テキスト（旧/モバイルレイアウト）
+    const ownerAnchor = doc.querySelector<HTMLAnchorElement>(
+      '#owner a, #owner-text a',
+    );
+    const ownerText = ownerAnchor?.textContent?.trim();
+    if (ownerText) return ownerText;
+
+    // 3. fallback: document.title から末尾 " - YouTube" 除去（タイトル先頭は video title だが、
+    //    streamer 名が title に入る運用も多く、null よりはマシな fallback）
+    const title = doc.title || '';
+    const stripped = title.replace(/\s*-\s*YouTube\s*$/, '').trim();
+    if (stripped) return stripped;
+
+    return '';
+  } catch {
+    return '';
+  }
+}
+
+/**
  * 親ページ内の `/channel/UC...` リンクから最頻出 channelId を返す。
  *
  * 配信者は join / videos / about / membership 等の複数サブパスを持つため、
