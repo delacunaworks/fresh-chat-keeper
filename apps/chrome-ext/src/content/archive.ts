@@ -83,6 +83,7 @@ import {
   disposeStreamDetector,
 } from './user-flagging/stream-detector.js';
 import { initAggregator, recordAggregate } from './user-flagging/aggregator.js';
+import { applyFlagToMessage, initUiOverlay } from './user-flagging/ui-overlay.js';
 import {
   flushAll as flushUserStats,
   clearAllCached,
@@ -343,6 +344,10 @@ export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
       // streamerChannelId は recordAggregate が enabled チェックで gating）。
       initStreamDetector(sessionTracker);
       initAggregator(settings, sessionTracker);
+      // Phase 3.5 B5: DOM overlay 起動。CSS 即注入 + body 属性で表示モード反映。
+      // 設定 onChanged の subscriber を内部で立てるので、enabled / displayStyle /
+      // sensitivity / scope 変更時に L2 cache クリア + 必要に応じて既存 DOM 再適用が走る。
+      initUiOverlay(settings, sessionTracker);
 
       // Phase 3.5: タブ離脱時に未 flush の userStats を救う。
       // Promise を await できないが chrome.storage.local.set は内部で
@@ -897,6 +902,13 @@ function emitJudgmentForElement(
     },
     primaryLabel: judgment.primaryLabel as JudgmentLabel,
   });
+
+  // Phase 3.5（B5）: 該当 renderer にフラグ data 属性を付ける（CSS で表示）。
+  // 内部で userFlagging.enabled を見て早期 return するので OFF 時は no-op。
+  // async だが fire-and-forget で OK（UI 更新は数 ms 遅れても許容）。
+  if (el instanceof HTMLElement) {
+    void applyFlagToMessage(el);
+  }
 }
 
 /**
