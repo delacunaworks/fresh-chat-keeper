@@ -9,6 +9,8 @@
  * 純粋データ・純粋ロジックのみを提供する。
  */
 
+import type { JudgmentLabel } from '../types.js';
+
 /** 視聴者フラグの 4 段階レベル。{@link evaluateFlagLevel} の戻り値。 */
 export type FlagLevel = 'clean' | 'grey' | 'yellow' | 'red';
 
@@ -143,4 +145,39 @@ export function emptyFlaggedCounts(): FlaggedCounts {
     offTopic: 0,
     backseat: 0,
   };
+}
+
+/**
+ * LABEL_PRECEDENCE で導出された primary ラベル（`JudgmentLabel`）を
+ * {@link FlaggedCounts} のキー（camelCase）に変換する。`'safe'` は集計対象外
+ * なので **null** を返す（呼び出し側がスキップ）。
+ *
+ * - `off_topic` → `offTopic`（snake_case ↔ camelCase の差を吸収）
+ * - 他のラベルは同名（`spoiler` / `harassment` / `spam` / `backseat`）
+ *
+ * `_exhaustive: never` で `JudgmentLabel` 拡張時のチェック漏れを型レベルで阻止。
+ * 新しいラベルを `JudgmentLabel` に追加したら本関数も更新が必要になる。
+ */
+export function primaryToCountKey(
+  label: JudgmentLabel,
+): keyof FlaggedCounts | null {
+  switch (label) {
+    case 'safe':
+      return null;
+    case 'spoiler':
+      return 'spoiler';
+    case 'harassment':
+      return 'harassment';
+    case 'spam':
+      return 'spam';
+    case 'off_topic':
+      return 'offTopic';
+    case 'backseat':
+      return 'backseat';
+    default: {
+      const _exhaustive: never = label;
+      void _exhaustive;
+      return null;
+    }
+  }
 }

@@ -52,12 +52,26 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
  * `DailyStats.date` の key と一致させるため必ず UTC 系を使うこと
  * （ローカル TZ 依存にするとユーザー環境ごとに日付境界がずれ、集計値が
  * 同じデータでも異なって見える）。
+ *
+ * B3 supplement で export 化。chrome-ext 側の user-stats-store でも
+ * 同じ UTC 日付ポリシーで `DailyStats.date` を生成する必要があるため、
+ * 単一の真実をここに集約する。
  */
-function toUtcDateKey(d: Date): string {
+export function formatDateKey(d: Date): string {
   const y = d.getUTCFullYear();
   const m = String(d.getUTCMonth() + 1).padStart(2, '0');
   const day = String(d.getUTCDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
+}
+
+/**
+ * UTC ベースの日数加算。`n` 日後（負なら前）の `Date` を返す。
+ *
+ * B3 supplement で export 化。chrome-ext 側の保持期間プルーニング
+ * （30 日超の `dailyStats` を破棄）等で再利用する。
+ */
+export function addDays(d: Date, n: number): Date {
+  return new Date(d.getTime() + n * MS_PER_DAY);
 }
 
 /**
@@ -86,9 +100,8 @@ export function extractPeriodStats(
 
   const days = input.period === '7d' ? 7 : 30;
   // 「直近 N 日」の最古日 = now の (N-1) 日前。両端含む。
-  const oldestMs = now.getTime() - (days - 1) * MS_PER_DAY;
-  const oldestKey = toUtcDateKey(new Date(oldestMs));
-  const newestKey = toUtcDateKey(now);
+  const oldestKey = formatDateKey(addDays(now, -(days - 1)));
+  const newestKey = formatDateKey(now);
 
   const counts = emptyFlaggedCounts();
   let totalMessages = 0;
