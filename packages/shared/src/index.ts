@@ -63,6 +63,7 @@ export {
   migrateSettings,
   SETTINGS_V1_BACKUP_KEY,
   SETTINGS_V2_BACKUP_KEY,
+  SETTINGS_V3_BACKUP_KEY,
 } from "./settings-migration.js";
 
 export { ok, err } from "./types/api.js";
