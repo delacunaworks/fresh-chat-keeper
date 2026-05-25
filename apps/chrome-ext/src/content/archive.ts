@@ -76,6 +76,18 @@ import {
   emitMisreportLog,
   shutdownCollectionEmitter,
 } from './collection-emit.js';
+// Phase 3.5（B4）: 視聴者統計の集計フック / セッション / 配信切替検出
+import { SessionTracker } from './user-flagging/session-tracker.js';
+import {
+  initStreamDetector,
+  disposeStreamDetector,
+} from './user-flagging/stream-detector.js';
+import { initAggregator, recordAggregate } from './user-flagging/aggregator.js';
+import {
+  flushAll as flushUserStats,
+  clearAllCached,
+} from '../shared/user-stats-store.js';
+import type { JudgmentLabel } from '@fresh-chat-keeper/judgment-engine';
 
 /** YouTube チャットリプレイのメッセージコンテナ */
 const ITEMS_SELECTOR = '#items';
@@ -127,9 +139,20 @@ function shutdownOnInvalidContext(): void {
   // Phase 2.5: ingest バッファをフラッシュ（拡張更新前に直近のログを救う）。
   // chrome.runtime が無効化されている場合 fetch も失敗するが try で保護される。
   void shutdownCollectionEmitter();
+  // Phase 3.5: stream-detector 停止 + 未 flush の userStats を救う
+  disposeStreamDetector();
+  void flushUserStats();
 }
 
 // ─── モジュールスコープ状態 ───────────────────────────────────────────────────
+
+/**
+ * Phase 3.5（B4）: 視聴者統計セッショントラッカー singleton。
+ * stream-detector が配信切替時に startNewSession を呼び、aggregator が
+ * recordMessage を呼ぶ。userFlagging.enabled=false でも生成は維持（リクエスト
+ * が来てから enabled をチェック）し、メモリコストは Map ひとつ分で軽量。
+ */
+const sessionTracker = new SessionTracker();
 
 let currentSettings: Settings | null = null;
 let currentKeywords: Set<string> = new Set();
@@ -314,6 +337,26 @@ export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
       // 呼んで二段構えにする（後勝ち）。
       void initCollectionEmitter(settings.collectionApiUrl, anonToken);
 
+      // Phase 3.5: 視聴者フラグ機能の集計パイプライン起動。enabled でも OFF でも
+      // 初期化は行う（onChanged で OFF→ON 切替に追従できるように）。
+      // stream-detector の polling は enabled に関わらず安全（取得した
+      // streamerChannelId は recordAggregate が enabled チェックで gating）。
+      initStreamDetector(sessionTracker);
+      initAggregator(settings, sessionTracker);
+
+      // Phase 3.5: タブ離脱時に未 flush の userStats を救う。
+      // Promise を await できないが chrome.storage.local.set は内部で
+      // commit に近い同期挙動なので fire-and-forget で十分。
+      // window 直接アクセスは content script で安全（iframe / parent
+      // ではなく content script 自身のグローバル）。
+      try {
+        window.addEventListener('beforeunload', () => {
+          void flushUserStats();
+        });
+      } catch {
+        // 非ブラウザ環境では何もしない（テスト / 異常系の保険）
+      }
+
       chrome.storage.onChanged.addListener((changes, area) => {
         if (area !== 'local' || !changes[STORAGE_KEY]) return;
         const prev = changes[STORAGE_KEY].oldValue as Settings | undefined;
@@ -331,6 +374,19 @@ export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
 
         currentSettings = next;
         currentKeywords = buildKeywordsFromSettings(next);
+
+        // Phase 3.5: userFlagging.sensitivity / scope 変更時に全 cached 無効化。
+        // displayStyle / enabled は判定値に影響しないので呼ばない（cached は判定
+        // 結果＝表示には影響しない）。enabled OFF→ON / ON→OFF は aggregator 側で
+        // 反映される（B5 が DOM 表示を update する経路は別）。
+        const prevUF = prev?.userFlagging;
+        const nextUF = next.userFlagging;
+        const sensitivityChanged =
+          JSON.stringify(prevUF?.sensitivity) !== JSON.stringify(nextUF?.sensitivity);
+        const scopeChanged = prevUF?.scope !== nextUF?.scope;
+        if (sensitivityChanged || scopeChanged) {
+          void clearAllCached();
+        }
 
         // B5-fix: トリガ表示モード変更を既存トリガ全件へ即時反映（再 attach 不要）。
         const triggerVisChanged =
@@ -827,6 +883,19 @@ function emitJudgmentForElement(
     stage: judgment.stage,
     reasonJa: judgment.reasonJa,
     labelSource: judgment.labelSource,
+  });
+
+  // Phase 3.5（B4）: 視聴者統計を集計。collection-emit と独立に gating される
+  // （userFlagging.enabled の cache を見て早期 return）。CollectionLabel と
+  // JudgmentLabel はメンバー集合が同一なので、ここでキャストする。識別子は
+  // YouTube 2026-05 仕様で @ハンドル名（targetAuthorChannelId）が表示名も兼ねる
+  // （attachActionBar / blockUser と同じ運用）。
+  recordAggregate({
+    user: {
+      channelId: targetAuthorChannelId,
+      displayName: targetAuthorChannelId,
+    },
+    primaryLabel: judgment.primaryLabel as JudgmentLabel,
   });
 }
 
