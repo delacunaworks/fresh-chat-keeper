@@ -190,10 +190,13 @@ export function getStreamerDisplayName(): string {
     const doc = window.parent?.document ?? (typeof document !== 'undefined' ? document : null);
     if (!doc) return '';
 
-    // 1. ytd-channel-name の表示名（yt-formatted-string / a / #text を順に拾う）
+    // 1. ytd-channel-name の表示名（yt-formatted-string / #text a / #text / a の順）。
+    //    B5-hotfix: 現代 YouTube DOM は `<ytd-channel-name><yt-formatted-string>...</yt-formatted-string></ytd-channel-name>`
+    //    が頻出パターンになっており、先頭で拾わないと title fallback まで降りてしまう。
     const channelNameEl = doc.querySelector('ytd-channel-name');
     if (channelNameEl) {
       const inner =
+        channelNameEl.querySelector('yt-formatted-string') ??
         channelNameEl.querySelector('#text a') ??
         channelNameEl.querySelector('#text') ??
         channelNameEl.querySelector('a');

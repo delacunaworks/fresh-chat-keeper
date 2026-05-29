@@ -30,6 +30,7 @@ import {
 import type { CachedStats } from '@fresh-chat-keeper/judgment-engine';
 
 const STREAMER = 'UC_streamer';
+const STREAMER_NAME = 'StreamerName';
 const USER_A = '@viewer_a';
 const USER_B = '@viewer_b';
 
@@ -271,7 +272,7 @@ describe('recordJudgment / 5 秒 windowed flush', () => {
   });
 
   it('1 record で 5s 後に flush（5s 未満では書かれない）', async () => {
-    recordJudgment(STREAMER, { channelId: USER_A, displayName: 'Alice' }, { spoiler: 1 });
+    recordJudgment(STREAMER, STREAMER_NAME, { channelId: USER_A, displayName: 'Alice' }, { spoiler: 1 });
     expect(fake.store.has(storeKeyFor(STREAMER))).toBe(false);
     await vi.advanceTimersByTimeAsync(4999);
     expect(fake.store.has(storeKeyFor(STREAMER))).toBe(false);
@@ -284,11 +285,11 @@ describe('recordJudgment / 5 秒 windowed flush', () => {
   });
 
   it('5s 窓内の複数 record を 1 set にまとめて書く', async () => {
-    recordJudgment(STREAMER, { channelId: USER_A, displayName: 'Alice' }, { spoiler: 1 });
+    recordJudgment(STREAMER, STREAMER_NAME, { channelId: USER_A, displayName: 'Alice' }, { spoiler: 1 });
     await vi.advanceTimersByTimeAsync(1000);
-    recordJudgment(STREAMER, { channelId: USER_A, displayName: 'Alice' }, { harassment: 1 });
+    recordJudgment(STREAMER, STREAMER_NAME, { channelId: USER_A, displayName: 'Alice' }, { harassment: 1 });
     await vi.advanceTimersByTimeAsync(1000);
-    recordJudgment(STREAMER, { channelId: USER_B, displayName: 'Bob' }, {});
+    recordJudgment(STREAMER, STREAMER_NAME, { channelId: USER_B, displayName: 'Bob' }, {});
     await vi.advanceTimersByTimeAsync(3500);
     await vi.runAllTimersAsync();
 
@@ -301,9 +302,9 @@ describe('recordJudgment / 5 秒 windowed flush', () => {
   });
 
   it('別 streamerId は独立タイマー（一方の flush で他方は書かれない）', async () => {
-    recordJudgment('UC_a', { channelId: USER_A, displayName: 'Alice' }, { spoiler: 1 });
+    recordJudgment('UC_a', 'NameA', { channelId: USER_A, displayName: 'Alice' }, { spoiler: 1 });
     await vi.advanceTimersByTimeAsync(3000);
-    recordJudgment('UC_b', { channelId: USER_A, displayName: 'Alice' }, { spoiler: 1 });
+    recordJudgment('UC_b', 'NameB', { channelId: USER_A, displayName: 'Alice' }, { spoiler: 1 });
     // UC_a の 5s が満了
     await vi.advanceTimersByTimeAsync(2500);
     await vi.runAllTimersAsync();
@@ -317,7 +318,7 @@ describe('recordJudgment / 5 秒 windowed flush', () => {
   });
 
   it('flush 後の新 record は再びタイマーを立てる', async () => {
-    recordJudgment(STREAMER, { channelId: USER_A, displayName: 'Alice' }, { spoiler: 1 });
+    recordJudgment(STREAMER, STREAMER_NAME, { channelId: USER_A, displayName: 'Alice' }, { spoiler: 1 });
     await vi.advanceTimersByTimeAsync(5500);
     await vi.runAllTimersAsync();
     expect(
@@ -325,7 +326,7 @@ describe('recordJudgment / 5 秒 windowed flush', () => {
     ).toBe(1);
 
     // 新たな record
-    recordJudgment(STREAMER, { channelId: USER_A, displayName: 'Alice' }, { harassment: 1 });
+    recordJudgment(STREAMER, STREAMER_NAME, { channelId: USER_A, displayName: 'Alice' }, { harassment: 1 });
     // 5s 経たないと反映されない
     await vi.advanceTimersByTimeAsync(2000);
     expect(
@@ -342,6 +343,7 @@ describe('recordJudgment / 5 秒 windowed flush', () => {
     const t0 = new Date('2026-05-24T12:00:00Z').getTime();
     recordJudgment(
       STREAMER,
+      STREAMER_NAME,
       { channelId: USER_A, displayName: 'Alice' },
       { spoiler: 1 },
       t0,
@@ -359,6 +361,7 @@ describe('recordJudgment / 5 秒 windowed flush', () => {
     const t0 = new Date('2026-05-24T12:00:00Z').getTime();
     recordJudgment(
       STREAMER,
+      STREAMER_NAME,
       { channelId: USER_A, displayName: 'Alice' },
       { spoiler: 1 },
       t0,
@@ -368,7 +371,7 @@ describe('recordJudgment / 5 秒 windowed flush', () => {
 
     // 2 回目（少し後）
     const t1 = t0 + 60_000;
-    recordJudgment(STREAMER, { channelId: USER_A, displayName: 'Alice2' }, {}, t1);
+    recordJudgment(STREAMER, STREAMER_NAME, { channelId: USER_A, displayName: 'Alice2' }, {}, t1);
     await vi.advanceTimersByTimeAsync(5500);
     await vi.runAllTimersAsync();
 
@@ -381,7 +384,7 @@ describe('recordJudgment / 5 秒 windowed flush', () => {
 
   it('cached は新フラグ受領時に null に倒される（B4 再計算用）', async () => {
     // 初回 + flush
-    recordJudgment(STREAMER, { channelId: USER_A, displayName: 'Alice' }, { spoiler: 1 });
+    recordJudgment(STREAMER, STREAMER_NAME, { channelId: USER_A, displayName: 'Alice' }, { spoiler: 1 });
     await vi.advanceTimersByTimeAsync(5500);
     await vi.runAllTimersAsync();
 
@@ -399,10 +402,88 @@ describe('recordJudgment / 5 秒 windowed flush', () => {
     expect((await loadStreamerStats(STREAMER)).users[USER_A].cached).not.toBeNull();
 
     // 新 record → cached が null になる
-    recordJudgment(STREAMER, { channelId: USER_A, displayName: 'Alice' }, { spoiler: 1 });
+    recordJudgment(STREAMER, STREAMER_NAME, { channelId: USER_A, displayName: 'Alice' }, { spoiler: 1 });
     await vi.advanceTimersByTimeAsync(5500);
     await vi.runAllTimersAsync();
     expect((await loadStreamerStats(STREAMER)).users[USER_A].cached).toBeNull();
+  });
+
+  // ─── B5-hotfix: streamerDisplayName 伝播 ─────────────────────────
+
+  it('B5-hotfix: streamerDisplayName が PendingStreamer 経由で flush 後の store に保存される', async () => {
+    recordJudgment(
+      STREAMER,
+      'Initial Streamer',
+      { channelId: USER_A, displayName: 'Alice' },
+      { spoiler: 1 },
+    );
+    await vi.advanceTimersByTimeAsync(5500);
+    await vi.runAllTimersAsync();
+
+    const stats = await loadStreamerStats(STREAMER);
+    expect(stats.streamerDisplayName).toBe('Initial Streamer');
+  });
+
+  it('B5-hotfix: 既存 pending の空 displayName を後続 record の非空値で上書きする', async () => {
+    // 1 件目: displayName 空（初回 record 時に DOM 未準備のケース）
+    recordJudgment(
+      STREAMER,
+      '',
+      { channelId: USER_A, displayName: 'Alice' },
+      { spoiler: 1 },
+    );
+    // 2 件目: 5s 窓内、displayName 取得済み
+    await vi.advanceTimersByTimeAsync(1000);
+    recordJudgment(
+      STREAMER,
+      'Late Resolved Streamer',
+      { channelId: USER_B, displayName: 'Bob' },
+      { harassment: 1 },
+    );
+    await vi.advanceTimersByTimeAsync(5500);
+    await vi.runAllTimersAsync();
+
+    const stats = await loadStreamerStats(STREAMER);
+    expect(stats.streamerDisplayName).toBe('Late Resolved Streamer');
+  });
+
+  it('B5-hotfix: flush 時に既存 StreamerScopedUserStats の空 displayName も refresh される', async () => {
+    // 1 度目の flush は displayName 空のまま保存（旧運用シミュレーション）
+    recordJudgment(STREAMER, '', { channelId: USER_A, displayName: 'Alice' }, { spoiler: 1 });
+    await vi.advanceTimersByTimeAsync(5500);
+    await vi.runAllTimersAsync();
+    expect((await loadStreamerStats(STREAMER)).streamerDisplayName).toBe('');
+
+    // 2 度目: 値を持って record → flush 時に refresh される
+    recordJudgment(
+      STREAMER,
+      'Recovered Name',
+      { channelId: USER_A, displayName: 'Alice' },
+      { spoiler: 1 },
+    );
+    await vi.advanceTimersByTimeAsync(5500);
+    await vi.runAllTimersAsync();
+
+    expect((await loadStreamerStats(STREAMER)).streamerDisplayName).toBe('Recovered Name');
+  });
+
+  it('B5-hotfix: 既に取得済みの displayName を空文字で潰さない（空→非空のみ許可）', async () => {
+    // 1 件目: 値あり
+    recordJudgment(
+      STREAMER,
+      'Established Name',
+      { channelId: USER_A, displayName: 'Alice' },
+      { spoiler: 1 },
+    );
+    // 2 件目: 5s 窓内、空文字（DOM 取得失敗のレース）
+    await vi.advanceTimersByTimeAsync(1000);
+    recordJudgment(STREAMER, '', { channelId: USER_B, displayName: 'Bob' }, {});
+    await vi.advanceTimersByTimeAsync(5500);
+    await vi.runAllTimersAsync();
+
+    // 上書きされず Established Name のまま
+    const stats = await loadStreamerStats(STREAMER);
+    expect(stats.streamerDisplayName).toBe('Established Name');
   });
 });
 
@@ -415,7 +496,7 @@ describe('flushAll: 即時書き込み', () => {
   });
 
   it('5s 未経過でも flushAll で chrome.storage に書く', async () => {
-    recordJudgment(STREAMER, { channelId: USER_A, displayName: 'Alice' }, { spoiler: 1 });
+    recordJudgment(STREAMER, STREAMER_NAME, { channelId: USER_A, displayName: 'Alice' }, { spoiler: 1 });
     expect(fake.store.has(storeKeyFor(STREAMER))).toBe(false);
     await flushAll();
     expect(fake.store.has(storeKeyFor(STREAMER))).toBe(true);

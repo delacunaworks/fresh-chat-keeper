@@ -23,7 +23,10 @@ import {
 import { STORAGE_KEY, type Settings } from '../../shared/settings.js';
 import { recordJudgment } from '../../shared/user-stats-store.js';
 import { SessionTracker } from './session-tracker.js';
-import { getCurrentStreamerChannelId } from './stream-detector.js';
+import {
+  getCurrentStreamerChannelId,
+  getCurrentStreamerDisplayName,
+} from './stream-detector.js';
 
 /** 1 判定結果分の最小 input。archive.ts が emit と同じ場所で渡す。 */
 export interface RecordAggregateInput {
@@ -110,7 +113,15 @@ export function recordAggregate(input: RecordAggregateInput): void {
   const flagged: Partial<FlaggedCounts> = buildFlaggedDelta(input.primaryLabel);
   const timestamp = input.timestamp ?? Date.now();
 
-  recordJudgment(streamerChannelId, input.user, flagged, timestamp);
+  // B5-hotfix: 配信者表示名も毎回渡す（store 側で「空→非空」のみ refresh される）。
+  // 初回 record 時に DOM 未準備で空文字でも、後続 record で取得できたら上書きされる。
+  recordJudgment(
+    streamerChannelId,
+    getCurrentStreamerDisplayName(),
+    input.user,
+    flagged,
+    timestamp,
+  );
   sessionTracker.recordMessage(input.user.channelId, flagged, timestamp);
 }
 

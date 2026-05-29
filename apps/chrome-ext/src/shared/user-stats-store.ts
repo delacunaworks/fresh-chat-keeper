@@ -314,6 +314,7 @@ const pendingByStreamer = new Map<string, PendingStreamer>();
  */
 export function recordJudgment(
   streamerChannelId: string,
+  streamerDisplayName: string,
   user: { channelId: string; displayName: string },
   flagged: Partial<FlaggedCounts>,
   timestamp: number = Date.now(),
@@ -324,11 +325,16 @@ export function recordJudgment(
   if (!p) {
     p = {
       streamerChannelId,
-      streamerDisplayName: '',
+      streamerDisplayName,
       users: new Map(),
       timer: null,
     };
     pendingByStreamer.set(streamerChannelId, p);
+  } else if (!p.streamerDisplayName && streamerDisplayName) {
+    // B5-hotfix: 既存 pending の displayName が空（初回 record 時に DOM がまだ
+    // 準備できていなかった場合）で、後続 record で取得できたら上書きする。
+    // 取得済みを意図せず空文字で潰さないため「空 → 非空」のみ許可。
+    p.streamerDisplayName = streamerDisplayName;
   }
 
   let u = p.users.get(user.channelId);
@@ -391,6 +397,13 @@ async function flushStreamer(streamerChannelId: string): Promise<void> {
   const stats = await loadStreamerStats(streamerChannelId);
   const now = Date.now();
   stats.lastUpdated = now;
+
+  // B5-hotfix: 既存ストアの streamerDisplayName が空（旧データ / DOM 抽出失敗で
+  // 過去 flush 時に空のまま保存されたケース）で、今回 pending が値を持っていれば
+  // refresh する。「空 → 非空」のみ許可（取得済みの値を空文字で潰さない）。
+  if (!stats.streamerDisplayName && p.streamerDisplayName) {
+    stats.streamerDisplayName = p.streamerDisplayName;
+  }
 
   for (const [userId, delta] of pendingUsers) {
     let entry = stats.users[userId];

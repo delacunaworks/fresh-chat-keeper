@@ -73,7 +73,11 @@ function settingsWith(userFlaggingEnabled: boolean): Settings {
 describe('aggregator', () => {
   let fake: FakeStorage;
   let tracker: SessionTracker;
-  let streamerSpy: ReturnType<typeof vi.spyOn>;
+  // 型は MockInstance だが共変問題でゆるく受ける（テスト局所スコープ）
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let streamerSpy: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let displayNameSpy: any;
 
   beforeEach(() => {
     fake = installFakeChrome();
@@ -84,10 +88,14 @@ describe('aggregator', () => {
     streamerSpy = vi
       .spyOn(streamDetector, 'getCurrentStreamerChannelId')
       .mockReturnValue('UC_streamer');
+    displayNameSpy = vi
+      .spyOn(streamDetector, 'getCurrentStreamerDisplayName')
+      .mockReturnValue('Test Streamer');
   });
 
   afterEach(() => {
     streamerSpy.mockRestore();
+    displayNameSpy.mockRestore();
     storeTest.resetPending();
   });
 
@@ -118,6 +126,17 @@ describe('aggregator', () => {
     const session = tracker.getSessionStats('@viewer');
     expect(session?.messageCount).toBe(1);
     expect(session?.flaggedCounts.spoiler).toBe(1);
+  });
+
+  it('B5-hotfix: streamerDisplayName が store に伝播する', async () => {
+    initAggregator(settingsWith(true), tracker);
+    recordAggregate({
+      user: { channelId: '@viewer', displayName: 'A' },
+      primaryLabel: 'spoiler',
+    });
+    await flushAll();
+    const stats = await loadStreamerStats('UC_streamer');
+    expect(stats.streamerDisplayName).toBe('Test Streamer');
   });
 
   it("enabled=true で 'safe' → messageCount +1 / 全カテゴリ 0", async () => {
