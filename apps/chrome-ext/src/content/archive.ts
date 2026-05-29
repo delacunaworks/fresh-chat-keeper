@@ -81,9 +81,12 @@ import { SessionTracker } from './user-flagging/session-tracker.js';
 import {
   initStreamDetector,
   disposeStreamDetector,
+  getCurrentStreamerChannelId,
 } from './user-flagging/stream-detector.js';
 import { initAggregator, recordAggregate } from './user-flagging/aggregator.js';
 import { applyFlagToMessage, initUiOverlay } from './user-flagging/ui-overlay.js';
+// Phase 3.5 B6: 統計詳細パネル（クリックモーダル、menu-manager onStats 経由で開く）
+import { openStatsPanel, closeCurrent as closeStatsPanel } from './user-flagging/stats-panel-entry.js';
 import {
   flushAll as flushUserStats,
   clearAllCached,
@@ -143,6 +146,8 @@ function shutdownOnInvalidContext(): void {
   // Phase 3.5: stream-detector 停止 + 未 flush の userStats を救う
   disposeStreamDetector();
   void flushUserStats();
+  // Phase 3.5 B6: 開いていれば StatsPanel を片付け（context 喪失時の DOM leak 防止）
+  closeStatsPanel();
 }
 
 // ─── モジュールスコープ状態 ───────────────────────────────────────────────────
@@ -154,6 +159,34 @@ function shutdownOnInvalidContext(): void {
  * が来てから enabled をチェック）し、メモリコストは Map ひとつ分で軽量。
  */
 const sessionTracker = new SessionTracker();
+
+/**
+ * Phase 3.5 B6: 行内メニューの「📊 統計を見る」を userFlagging.enabled に
+ * 追従させる。enabled=true なら openStatsPanel を注入、false なら undefined を
+ * 入れて button を非表示化（menu-manager 側で `if (cb.onStats)` ガード）。
+ *
+ * クロージャ内で getCurrentStreamerChannelId をクリック時に都度評価するため、
+ * 配信切替後の最新 streamerChannelId が反映される。streamerChannelId が
+ * 取れなければ no-op（warn 出して見送り）。
+ */
+function applyOnStatsCallback(enabled: boolean): void {
+  if (!enabled) {
+    actionMenuManager.setOnStats(undefined);
+    // 既に開いていたパネルがあれば閉じる（OFF 切替時の取り残し防止）
+    closeStatsPanel();
+    return;
+  }
+  actionMenuManager.setOnStats((channelId, displayName) => {
+    const streamerId = getCurrentStreamerChannelId();
+    if (!streamerId) {
+      console.warn(
+        '[FreshChatKeeper] StatsPanel skip: streamerChannelId 未取得（DOM 抽出待ち / 失敗）',
+      );
+      return;
+    }
+    openStatsPanel(streamerId, channelId, displayName, sessionTracker);
+  });
+}
 
 let currentSettings: Settings | null = null;
 let currentKeywords: Set<string> = new Set();
@@ -300,6 +333,8 @@ export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
     // 告知 + 再送可能化する。成功時のみ menu-manager が完了告知 + close。
     onReport: (target, reportedLabel, reportKind) =>
       handleReport(target.messageEl, target.text, reportedLabel, reportKind),
+    // Phase 3.5 B6: 起動時の onStats は loadSettings 完了後に setOnStats で
+    // 流し込む（initial settings がまだ読めていないため init には渡さない）。
   });
 
   // Stage 2 キャッシュの読み込みとトークン取得を並行して初期化
@@ -348,6 +383,9 @@ export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
       // 設定 onChanged の subscriber を内部で立てるので、enabled / displayStyle /
       // sensitivity / scope 変更時に L2 cache クリア + 必要に応じて既存 DOM 再適用が走る。
       initUiOverlay(settings, sessionTracker);
+      // Phase 3.5 B6: 行内メニュー「📊 統計を見る」を userFlagging.enabled に応じて
+      // 表示/非表示する。setOnStats(undefined) で button 非表示（未注入と同等）。
+      applyOnStatsCallback(settings.userFlagging.enabled);
 
       // Phase 3.5: タブ離脱時に未 flush の userStats を救う。
       // Promise を await できないが chrome.storage.local.set は内部で
@@ -391,6 +429,13 @@ export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
         const scopeChanged = prevUF?.scope !== nextUF?.scope;
         if (sensitivityChanged || scopeChanged) {
           void clearAllCached();
+        }
+
+        // Phase 3.5 B6: userFlagging.enabled トグルで「📊 統計を見る」を on/off。
+        // 初期値は loadSettings 完了時に注入済み（applyOnStatsCallback 参照）。
+        const enabledChanged = prevUF?.enabled !== nextUF?.enabled;
+        if (enabledChanged) {
+          applyOnStatsCallback(nextUF?.enabled === true);
         }
 
         // B5-fix: トリガ表示モード変更を既存トリガ全件へ即時反映（再 attach 不要）。

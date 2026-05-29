@@ -623,6 +623,19 @@ export class ActionMenuManager {
       .forEach((el) => el.setAttribute(TRIGGER_VIS_ATTR, mode));
   }
 
+  /**
+   * Phase 3.5 B6: onStats コールバックを動的に差し替える。
+   *
+   * archive.ts が起動時 + chrome.storage.onChanged で呼び、
+   * `userFlagging.enabled` トグルに追従させる。null を渡すと
+   * メニューの「📊 統計を見る」ボタンが非表示になる（未注入と同等）。
+   * init を呼び直さなくて済むよう専用の setter として切り出す。
+   */
+  setOnStats(cb: ActionMenuCallbacks['onStats']): void {
+    if (this.callbacks === null) return;
+    this.callbacks = { ...this.callbacks, onStats: cb };
+  }
+
   /** テスト/デバッグ用: 現在表示中のターゲットを返す（なければ null）。 */
   getCurrentTarget(): ActionMenuTarget | null {
     return this.current?.target ?? null;
