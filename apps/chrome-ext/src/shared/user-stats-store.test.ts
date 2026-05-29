@@ -15,6 +15,7 @@ import {
   loadStreamerStats,
   saveStreamerStats,
   clearStreamerStats,
+  clearUserStatsFor,
   clearAllUserStats,
   normalizeStreamerStats,
   emptyStreamerStats,
@@ -579,5 +580,66 @@ describe('cached API', () => {
     await clearAllCached();
     expect((await loadStreamerStats('UC_a')).users[USER_A].cached).toBeNull();
     expect((await loadStreamerStats('UC_b')).users[USER_A].cached).toBeNull();
+  });
+});
+
+// ─── clearUserStatsFor（B6） ─────────────────────────────────────
+
+describe('clearUserStatsFor: 1 ユーザー削除', () => {
+  beforeEach(() => {
+    installFakeChrome();
+  });
+
+  it('対象 user を削除、他 user は残る', async () => {
+    const stats = emptyStreamerStats(STREAMER, 'Streamer');
+    stats.users[USER_A] = {
+      channelId: USER_A,
+      displayNameLatest: 'Alice',
+      displayNameFirstSeen: 'Alice',
+      firstSeenAt: 0,
+      lastSeenAt: 0,
+      dailyStats: {},
+      cached: null,
+    };
+    stats.users[USER_B] = {
+      channelId: USER_B,
+      displayNameLatest: 'Bob',
+      displayNameFirstSeen: 'Bob',
+      firstSeenAt: 0,
+      lastSeenAt: 0,
+      dailyStats: {},
+      cached: null,
+    };
+    await saveStreamerStats(stats);
+
+    await clearUserStatsFor(STREAMER, USER_A);
+
+    const after = await loadStreamerStats(STREAMER);
+    expect(after.users[USER_A]).toBeUndefined();
+    expect(after.users[USER_B]).toBeDefined();
+    expect(after.streamerDisplayName).toBe('Streamer');
+  });
+
+  it('対象 user が存在しなければ no-op（例外なし、store 不変）', async () => {
+    const stats = emptyStreamerStats(STREAMER, 'Streamer');
+    await saveStreamerStats(stats);
+    await clearUserStatsFor(STREAMER, USER_A);
+    expect((await loadStreamerStats(STREAMER)).users).toEqual({});
+  });
+
+  it('配信者スコープ自体は残る（clearStreamerStats とは別の挙動）', async () => {
+    const stats = emptyStreamerStats(STREAMER, 'Streamer');
+    stats.users[USER_A] = {
+      channelId: USER_A,
+      displayNameLatest: 'Alice',
+      displayNameFirstSeen: 'Alice',
+      firstSeenAt: 0,
+      lastSeenAt: 0,
+      dailyStats: {},
+      cached: null,
+    };
+    await saveStreamerStats(stats);
+    await clearUserStatsFor(STREAMER, USER_A);
+    expect((await loadStreamerStats(STREAMER)).streamerChannelId).toBe(STREAMER);
   });
 });

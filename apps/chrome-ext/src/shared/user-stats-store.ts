@@ -206,6 +206,24 @@ export async function clearStreamerStats(streamerChannelId: string): Promise<voi
 }
 
 /**
+ * 1 視聴者の統計だけを削除する（配信者スコープ内の users から該当エントリを除去）。
+ * StatsPanel の「🗑️ この人の統計をリセット」ボタン（B6）から呼ばれる。
+ *
+ * 該当 user が居なくても例外を投げない（no-op）。配信者スコープ自体は残し、
+ * 他の視聴者の統計は影響を受けない。
+ */
+export async function clearUserStatsFor(
+  streamerChannelId: string,
+  userChannelId: string,
+): Promise<void> {
+  const stats = await loadStreamerStats(streamerChannelId);
+  if (!stats.users[userChannelId]) return;
+  delete stats.users[userChannelId];
+  stats.lastUpdated = Date.now();
+  await saveStreamerStats(stats);
+}
+
+/**
  * すべての `fck_user_stats:*` キーを一括削除する。`fck_settings` 等の他キーは残す。
  * popup の「全消去」ボタン（B8）から呼ばれる。
  */
