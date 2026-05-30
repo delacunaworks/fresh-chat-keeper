@@ -25,6 +25,50 @@ interface MountedPanel {
 let currentPanel: MountedPanel | null = null;
 
 /**
+ * YouTube ネイティブの 3 点メニュー（`tp-yt-iron-dropdown`）が開いていると
+ * Polymer iron-overlay の scroll lock が document に capture フェーズで効き、
+ * FCK パネル内の wheel/touchmove スクロールが奪われる（スクロールバーのみ可）。
+ * パネルを開く前に開いている dropdown を閉じてロックを解放する。
+ *
+ * content script は live_chat_replay iframe で動くため、まず自 document を見る。
+ * 念のため parent document（watch ページ側、同一 origin）も走査する。
+ */
+function closeYouTubeNativeDropdowns(): void {
+  const docs: Document[] = [];
+  if (typeof document !== 'undefined') docs.push(document);
+  try {
+    const parentDoc =
+      typeof window !== 'undefined' && window.parent !== window
+        ? window.parent.document
+        : null;
+    if (parentDoc && !docs.includes(parentDoc)) docs.push(parentDoc);
+  } catch {
+    // cross-origin 例外ガード（YouTube は同一 origin なので通常到達しない）
+  }
+
+  for (const doc of docs) {
+    let dropdowns: NodeListOf<Element>;
+    try {
+      dropdowns = doc.querySelectorAll('tp-yt-iron-dropdown');
+    } catch {
+      continue;
+    }
+    dropdowns.forEach((d) => {
+      const el = d as Element & { opened?: boolean; close?: () => void };
+      const isOpen =
+        el.opened === true || d.getAttribute('aria-hidden') === 'false';
+      if (isOpen && typeof el.close === 'function') {
+        try {
+          el.close();
+        } catch {
+          // close 失敗は無視（YouTube 実装変更耐性）
+        }
+      }
+    });
+  }
+}
+
+/**
  * StatsPanel を開く。archive.ts の menu-manager.onStats から呼ばれる。
  * userFlagging.enabled の gating は archive.ts 側で行う（本関数は無条件 open）。
  */
@@ -35,6 +79,10 @@ export function openStatsPanel(
   sessionTracker: SessionTracker,
 ): void {
   try {
+    // YouTube ネイティブメニューが開いていると scroll lock で StatsPanel 内
+    // スクロールが効かなくなるので、最初にロックを解放する。
+    closeYouTubeNativeDropdowns();
+
     ensureStylesInjected();
 
     // singleton: 既存パネルがあれば閉じてから開き直す
