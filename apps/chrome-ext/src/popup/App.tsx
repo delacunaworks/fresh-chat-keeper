@@ -33,6 +33,7 @@ import { CategoryFilters } from './tabs/CategoryFilters.js';
 import { UserBlocklist } from './tabs/UserBlocklist.js';
 import { UserFlagging } from './tabs/UserFlagging.js';
 import { FirstTimeV3Notice } from './FirstTimeV3Notice.js';
+import { FlaggingIntroduction } from './FlaggingIntroduction.js';
 import { ensureGameplayHintsForCategories } from '../content/stage-dispatch.js';
 import type { CategorySettings } from '../shared/settings.js';
 import type { KBGame } from '@fresh-chat-keeper/knowledge-base';
@@ -708,6 +709,7 @@ export default function App() {
       </div>
 
       <FirstTimeV3Notice onGoToCategory={() => setActiveTab('category')} />
+      <FlaggingIntroduction onGoToFlagging={() => setActiveTab('flagging')} />
 
       <TabBar active={activeTab} onChange={setActiveTab} />
 
