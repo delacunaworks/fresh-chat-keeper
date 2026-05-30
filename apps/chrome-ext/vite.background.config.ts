@@ -25,6 +25,12 @@ export default defineConfig({
         find: '@fresh-chat-keeper/shared',
         replacement: resolve(__dirname, '../../packages/shared/src/index.ts'),
       },
+      // B8: data-cleanup.ts が formatDateKey / addDays（UTC 日付計算の単一の真実）を
+      // judgment-engine から import するため alias 追加。content config と同じ解決。
+      {
+        find: '@fresh-chat-keeper/judgment-engine',
+        replacement: resolve(__dirname, '../../packages/judgment-engine/src/index.ts'),
+      },
     ],
   },
 });

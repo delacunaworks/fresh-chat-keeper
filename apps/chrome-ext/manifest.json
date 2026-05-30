@@ -10,7 +10,7 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "permissions": ["storage"],
+  "permissions": ["storage", "alarms"],
   "host_permissions": [
     "*://www.youtube.com/*",
     "https://fresh-chat-keeper-proxy.playnicelab.workers.dev/*",

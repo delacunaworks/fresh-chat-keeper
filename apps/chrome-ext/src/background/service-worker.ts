@@ -12,6 +12,10 @@
  */
 
 import { cleanupLegacyPrefixKeys } from '../shared/settings-loader.js';
+import {
+  CLEANUP_ALARM_NAME,
+  runUserStatsCleanup,
+} from './data-cleanup.js';
 import type {
   BackgroundFetchRequest,
   BackgroundFetchResponse,
@@ -32,6 +36,24 @@ if (typeof chrome !== 'undefined' && chrome.runtime) {
   chrome.runtime.onStartup.addListener(() => {
     // ブラウザ再起動時にも実行（onInstalled は更新時のみ）
     void cleanupLegacyPrefixKeys();
+  });
+}
+
+// ─── Phase 3.5 B8: 視聴者統計のクリーンアップ alarm（テスト環境では skip）──
+
+// chrome.alarms は MV3 で background から定期処理を回す唯一の安定手段
+// （setInterval は service worker の suspend で止まる）。1 日 1 回プルーニング。
+if (typeof chrome !== 'undefined' && chrome.runtime && chrome.alarms) {
+  // create は冪等（同名 alarm は上書き）。onInstalled/onStartup を待たず登録して
+  // よいが、Service Worker が起動するたびに呼ばれても問題ない（既存を再設定するだけ）。
+  chrome.alarms.create(CLEANUP_ALARM_NAME, {
+    delayInMinutes: 60, // 起動 1 時間後に初回
+    periodInMinutes: 24 * 60, // 以降 24 時間ごと
+  });
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === CLEANUP_ALARM_NAME) {
+      void runUserStatsCleanup();
+    }
   });
 }
 
