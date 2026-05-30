@@ -9,6 +9,22 @@ import { resolve } from 'path';
  * IIFE 形式（即時実行関数）にバンドルする必要がある。
  */
 export default defineConfig({
+  /**
+   * B6-hotfix: React / ReactDOM が `process.env.NODE_ENV` を実行時参照するため
+   * ビルド時にリテラル置換する。popup 用 vite.config.ts は @vitejs/plugin-react が
+   * 自動で同等の処理を行うので不要だが、content script はプラグイン無しの素 IIFE
+   * バンドルなので明示的に define する必要がある（無いと content script 起動時に
+   * `process is not defined` で ReferenceError → 拡張全機能停止）。
+   *
+   * 'production' を選ぶ理由:
+   * - 出荷用拡張なので React dev 警告は不要
+   * - production React は dev-only コード（PropTypes / DevTools フック等）を
+   *   除去するため bundle サイズが縮む（B6 で 1.49 MB に膨らんだ content.js が
+   *   200〜400 KB 程度縮む見込み、G-6 対応も兼ねる）
+   */
+  define: {
+    'process.env.NODE_ENV': JSON.stringify('production'),
+  },
   build: {
     outDir: 'dist',
     emptyOutDir: false,
