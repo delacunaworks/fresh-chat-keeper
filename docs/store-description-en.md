@@ -50,6 +50,12 @@ Have you ever had your enjoyment ruined by spoilers, hints, or unsolicited advic
 **Automatic Spam Detection (new in v0.4.0)**
 - Detects repeated comments, URL flooding, and emoji spam before the AI call
 
+**Viewer Flagging (new in v0.5.0, opt-in)**
+- Visualizes viewers who repeatedly trigger filters across 4 levels (clean / minor / caution / warning) to support your blocking decisions
+- Choose display style (icon / color / hover-only / red-only), tracking window (session / 7 days / 30 days), and sensitivity
+- "📊 View stats" next to a comment shows per-viewer breakdowns and a daily trend; the "Flagged viewers" tab supports bulk blocking
+- Off by default. All stats are stored only on your device and never sent externally (distinct from the v0.3.5 opt-in data collection)
+
 **Custom Block Words**
 - Build your own block list for any words or phrases you want to hide instantly
 
