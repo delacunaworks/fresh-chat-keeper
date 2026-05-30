@@ -16,6 +16,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   evaluateFlagLevel,
+  evaluateFlagLevelsForUsers,
   extractPeriodStats,
   SEVERITY_WEIGHTS,
 } from './flag-evaluator.js';
@@ -676,5 +677,71 @@ describe('G: 退化ケース', () => {
     const snapshot = JSON.parse(JSON.stringify(stats.dailyStats));
     evaluateFlagLevel(input({ stats }), NOW);
     expect(stats.dailyStats).toEqual(snapshot);
+  });
+});
+
+// ─── H. evaluateFlagLevelsForUsers（B7 batch helper） ────────────────
+
+describe('H: evaluateFlagLevelsForUsers', () => {
+  it('複数 user を一括評価し、入力順を保持して level を返す', () => {
+    const red = mockStats({
+      channelId: '@red',
+      daily: [mockDaily('2026-05-24', { messages: 10, harassment: 3 })], // severity 12 / norm 1.2 / flagged 3 → red
+    });
+    const clean = mockStats({
+      channelId: '@clean',
+      daily: [mockDaily('2026-05-24', { messages: 50 })], // flagged 0 → clean
+    });
+    const yellow = mockStats({
+      channelId: '@yellow',
+      daily: [mockDaily('2026-05-24', { messages: 45, harassment: 2, spoiler: 3 })], // norm 0.344 / flagged 5 → yellow（標準感度）
+    });
+
+    const out = evaluateFlagLevelsForUsers(
+      [red, clean, yellow],
+      '7d',
+      STANDARD_SENSITIVITY,
+      NOW,
+    );
+
+    expect(out.map((o) => o.entry.channelId)).toEqual(['@red', '@clean', '@yellow']);
+    expect(out[0].result.level).toBe('red');
+    expect(out[1].result.level).toBe('clean');
+    expect(out[2].result.level).toBe('yellow');
+  });
+
+  it('空配列 → 空配列', () => {
+    expect(evaluateFlagLevelsForUsers([], '30d', STANDARD_SENSITIVITY, NOW)).toEqual([]);
+  });
+
+  it('period によって結果が変わる（30d は古いデータも含む）', () => {
+    const user = mockStats({
+      channelId: '@u',
+      daily: [
+        mockDaily('2026-05-24', { messages: 2 }), // now: 7d/30d 両方に含む
+        mockDaily('2026-05-10', { messages: 10, harassment: 3 }), // 14 日前: 30d のみ
+      ],
+    });
+
+    const out7 = evaluateFlagLevelsForUsers([user], '7d', STANDARD_SENSITIVITY, NOW);
+    const out30 = evaluateFlagLevelsForUsers([user], '30d', STANDARD_SENSITIVITY, NOW);
+
+    // 7d: 2 messages のみ（少サンプル, harassment 0）→ grey
+    expect(out7[0].result.level).toBe('grey');
+    expect(out7[0].result.totalMessages).toBe(2);
+    // 30d: 12 messages / harassment 3 → red
+    expect(out30[0].result.level).toBe('red');
+    expect(out30[0].result.totalMessages).toBe(12);
+  });
+
+  it('cached の読み書きをしない（純粋計算、entry.cached は不変）', () => {
+    const user = mockStats({
+      channelId: '@u',
+      daily: [mockDaily('2026-05-24', { messages: 10, harassment: 3 })],
+    });
+    expect(user.cached).toBeNull();
+    evaluateFlagLevelsForUsers([user], '7d', STANDARD_SENSITIVITY, NOW);
+    // helper は cached を一切触らない（popup 表示専用、所有は content 側）
+    expect(user.cached).toBeNull();
   });
 });

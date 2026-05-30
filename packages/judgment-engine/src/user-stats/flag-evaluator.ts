@@ -14,6 +14,7 @@ import {
   type FlagEvaluationInput,
   type FlagEvaluationResult,
   type FlagLevel,
+  type UserStatsEntry,
 } from './types.js';
 
 /**
@@ -195,4 +196,34 @@ export function evaluateFlagLevel(
   }
 
   return { level, severityScore, totalMessages, totalFlagged };
+}
+
+/**
+ * 複数ユーザーの flag level を純粋計算で一括算出する（storage I/O なし）。
+ *
+ * popup の配信サマリ用（B7）。各 {@link UserStatsEntry} に対し
+ * {@link evaluateFlagLevel} を呼ぶだけで、`cached` の読み書きは一切行わない
+ * （popup は表示専用。`cached` の所有は content 側 = flag-level-resolver の責務）。
+ *
+ * `period: 'session'` は popup には `sessionStats` が無い（content の SessionTracker
+ * 専用）ため、呼び出し側で `'7d'` / `'30d'` にフォールバックすること。本関数自体は
+ * 渡された period を素直に扱う（session を渡すと sessionStats 無しで grey/clean に
+ * 倒れる）。
+ *
+ * @param users 評価対象の UserStatsEntry 配列（loadStreamerStats の users を渡す想定）
+ * @param period 集計期間
+ * @param sensitivity 感度しきい値
+ * @param now テスト固定用。省略時は `new Date()`
+ * @returns 各 entry とその評価結果のペア配列（入力順を保持）
+ */
+export function evaluateFlagLevelsForUsers(
+  users: UserStatsEntry[],
+  period: 'session' | '7d' | '30d',
+  sensitivity: { yellow: number; red: number },
+  now: Date = new Date(),
+): Array<{ entry: UserStatsEntry; result: FlagEvaluationResult }> {
+  return users.map((entry) => ({
+    entry,
+    result: evaluateFlagLevel({ stats: entry, period, sensitivity }, now),
+  }));
 }
