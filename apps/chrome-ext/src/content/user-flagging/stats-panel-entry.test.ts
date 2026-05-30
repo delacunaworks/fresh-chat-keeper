@@ -28,10 +28,11 @@ interface StubElement {
   attributes: Map<string, string>;
   children: StubElement[];
   parent: StubElement | null;
-  /** B6-hotfix-2: tp-yt-iron-dropdown 模倣用 Polymer プロパティ。 */
-  opened?: boolean;
-  /** B6-hotfix-2: dropdown.close() 模倣 hook。 */
-  close?: () => void;
+  /**
+   * B6-hotfix-3: HTMLElement.offsetParent 模倣。visible なら任意 truthy 値、
+   * 非表示なら null。closeYouTubeNativeDropdowns の visibility 判定で使用。
+   */
+  offsetParent?: unknown;
   appendChild(child: StubElement): StubElement;
   remove(): void;
   setAttribute(k: string, v: string): void;
@@ -75,6 +76,8 @@ interface StubDocument {
   createElement(tag?: string): StubElement;
   getElementById(id: string): StubElement | null;
   querySelectorAll(selector: string): StubElement[];
+  /** B6-hotfix-3: Escape dispatch を観測するための spy フック。 */
+  dispatchEvent(ev: { type: string; key?: string }): boolean;
 }
 
 function installStubDocument(): {
@@ -82,11 +85,14 @@ function installStubDocument(): {
   head: StubElement;
   body: StubElement;
   allElements: StubElement[];
+  /** B6-hotfix-3: dispatchEvent 呼び出しを観測する spy。 */
+  dispatchSpy: ReturnType<typeof vi.fn>;
 } {
   const head = makeStubElement('head');
   const documentElement = makeStubElement('html');
   const body = makeStubElement('body');
   const allElements: StubElement[] = [head, documentElement, body];
+  const dispatchSpy = vi.fn((_ev: unknown) => true);
   const doc: StubDocument = {
     head,
     documentElement,
@@ -112,26 +118,46 @@ function installStubDocument(): {
       const target = selector.toUpperCase();
       return allElements.filter((el) => el.tagName === target);
     },
+    // B6-hotfix-3: Escape dispatch を観測する spy
+    dispatchEvent(ev) {
+      return dispatchSpy(ev) as boolean;
+    },
   };
   (globalThis as unknown as { document: StubDocument }).document = doc;
-  // B6-hotfix-2: window.parent をテスト用に同 document を指すよう設定
-  // （closeYouTubeNativeDropdowns が parent document を見にいく経路を通すため）
-  (globalThis as unknown as { window: { parent: { document: StubDocument } } }).window = {
+  // B6-hotfix-2/3: window.parent をテスト用に同 document を指すよう設定
+  // （closeYouTubeNativeDropdowns が parent document を見にいく経路を通すため）。
+  // self-parent（window.parent === window）状態を作るため window と parent を
+  // 別オブジェクトにする（!== 比較が真になり parent document も走査される）。
+  (globalThis as unknown as {
+    window: { parent: { document: StubDocument } };
+  }).window = {
     parent: { document: doc },
   };
-  return { doc, head, body, allElements };
+  // B6-hotfix-3: KeyboardEvent コンストラクタを globalThis に注入（node 既定では未定義）
+  (globalThis as unknown as { KeyboardEvent: typeof KeyboardEvent }).KeyboardEvent =
+    class KeyboardEventStub {
+      type: string;
+      key: string;
+      constructor(type: string, init?: { key?: string }) {
+        this.type = type;
+        this.key = init?.key ?? '';
+      }
+    } as unknown as typeof KeyboardEvent;
+  return { doc, head, body, allElements, dispatchSpy };
 }
 
 describe('stats-panel-entry', () => {
   let body: StubElement;
   let head: StubElement;
   let allElements: StubElement[];
+  let dispatchSpy: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     const installed = installStubDocument();
     body = installed.body;
     head = installed.head;
     allElements = installed.allElements;
+    dispatchSpy = installed.dispatchSpy;
     __test__.reset();
   });
 
@@ -174,77 +200,69 @@ describe('stats-panel-entry', () => {
     expect(styleEl?.textContent).toContain('fck-stats-overlay');
   });
 
-  // ─── B6-hotfix-2: closeYouTubeNativeDropdowns ─────────────────────────
+  // ─── B6-hotfix-3: closeYouTubeNativeDropdowns（Escape dispatch 方式） ───
 
-  function makeDropdown(opts: {
-    open: boolean;
-    hasClose?: boolean;
-    closeFn?: () => void;
-  }): StubElement {
-    const el = makeStubElement('tp-yt-iron-dropdown');
-    el.opened = opts.open;
-    el.setAttribute('aria-hidden', opts.open ? 'false' : 'true');
-    if (opts.hasClose !== false) {
-      el.close = opts.closeFn ?? (() => undefined);
-    }
+  function makePopup(opts: { visible: boolean }): StubElement {
+    const el = makeStubElement('ytd-menu-popup-renderer');
+    // offsetParent は HTMLElement の可視性プロキシ。truthy なら visible、null なら hidden。
+    el.offsetParent = opts.visible ? ({} as unknown) : null;
     allElements.push(el);
     return el;
   }
 
-  it('B6-hotfix-2: 開いている dropdown（opened=true or aria-hidden=false）に対し .close() が呼ばれる', () => {
-    const close1 = vi.fn();
-    const close2 = vi.fn();
-    makeDropdown({ open: true, closeFn: close1 }); // opened=true
-    const el2 = makeDropdown({ open: false }); // aria-hidden=true（初期）
-    el2.setAttribute('aria-hidden', 'false'); // aria-hidden ベースで open とみなされる
-    el2.close = close2;
+  it('B6-hotfix-3: visible な ytd-menu-popup-renderer 存在 → Escape を dispatch', () => {
+    makePopup({ visible: true });
 
     openStatsPanel('UC_x', '@viewer', '@viewer', new SessionTracker());
 
-    expect(close1).toHaveBeenCalledTimes(1);
-    expect(close2).toHaveBeenCalledTimes(1);
+    expect(dispatchSpy).toHaveBeenCalled();
+    const ev = dispatchSpy.mock.calls[0][0] as { type: string; key: string };
+    expect(ev.type).toBe('keydown');
+    expect(ev.key).toBe('Escape');
     expect(__test__.hasCurrentPanel()).toBe(true); // 通常 mount も走る
   });
 
-  it('B6-hotfix-2: 閉じている dropdown（aria-hidden=true, opened=false）には .close() が呼ばれない', () => {
-    const close = vi.fn();
-    makeDropdown({ open: false, closeFn: close });
+  it('B6-hotfix-3: popup 存在するが offsetParent=null（hidden） → dispatch 呼ばれない', () => {
+    makePopup({ visible: false });
 
     openStatsPanel('UC_x', '@viewer', '@viewer', new SessionTracker());
 
-    expect(close).not.toHaveBeenCalled();
-  });
-
-  it('B6-hotfix-2: .close メソッドが無い dropdown でも例外を投げない（try/catch ガード）', () => {
-    const el = makeStubElement('tp-yt-iron-dropdown');
-    el.opened = true;
-    el.setAttribute('aria-hidden', 'false');
-    // close メソッドを敢えてセットしない
-    allElements.push(el);
-
-    expect(() =>
-      openStatsPanel('UC_x', '@viewer', '@viewer', new SessionTracker()),
-    ).not.toThrow();
+    expect(dispatchSpy).not.toHaveBeenCalled();
     expect(__test__.hasCurrentPanel()).toBe(true);
   });
 
-  it('B6-hotfix-2: dropdown が 1 つも無くても panel は正常に mount される（回帰なし）', () => {
+  it('B6-hotfix-3: popup が 1 つも無い → dispatch 呼ばれない、panel は正常 mount（回帰なし）', () => {
     openStatsPanel('UC_x', '@viewer', '@viewer', new SessionTracker());
+
+    expect(dispatchSpy).not.toHaveBeenCalled();
     const root = body.children.find((c) => c.id === __test__.ROOT_ELEMENT_ID);
     expect(root).toBeDefined();
     expect(__test__.hasCurrentPanel()).toBe(true);
   });
 
-  it('B6-hotfix-2: close() 自身が throw しても panel mount は続く（YouTube 実装変更耐性）', () => {
-    const close = vi.fn(() => {
-      throw new Error('close failed');
+  it('B6-hotfix-3: dispatchEvent が throw しても panel mount は続く（try/catch ガード）', () => {
+    makePopup({ visible: true });
+    dispatchSpy.mockImplementation(() => {
+      throw new Error('dispatch failed');
     });
-    makeDropdown({ open: true, closeFn: close });
 
     expect(() =>
       openStatsPanel('UC_x', '@viewer', '@viewer', new SessionTracker()),
     ).not.toThrow();
-    expect(close).toHaveBeenCalledTimes(1);
+    expect(dispatchSpy).toHaveBeenCalled();
     expect(__test__.hasCurrentPanel()).toBe(true);
+  });
+
+  it('B6-hotfix-3: visible popup と hidden popup 混在 → visible が 1 つでもあれば dispatch', () => {
+    makePopup({ visible: false });
+    makePopup({ visible: true });
+    makePopup({ visible: false });
+
+    openStatsPanel('UC_x', '@viewer', '@viewer', new SessionTracker());
+
+    // 自 document + parent document の両走査だが同 doc を共有するので 2 回 dispatch される
+    expect(dispatchSpy).toHaveBeenCalled();
+    const calls = dispatchSpy.mock.calls;
+    expect(calls.every((c) => (c[0] as { key: string }).key === 'Escape')).toBe(true);
   });
 });

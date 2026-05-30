@@ -25,46 +25,69 @@ interface MountedPanel {
 let currentPanel: MountedPanel | null = null;
 
 /**
- * YouTube ネイティブの 3 点メニュー（`tp-yt-iron-dropdown`）が開いていると
- * Polymer iron-overlay の scroll lock が document に capture フェーズで効き、
- * FCK パネル内の wheel/touchmove スクロールが奪われる（スクロールバーのみ可）。
- * パネルを開く前に開いている dropdown を閉じてロックを解放する。
+ * YouTube ネイティブの 3 点メニュー（`ytd-menu-popup-renderer` を
+ * `tp-yt-iron-dropdown` がラップ）が開いていると、iron-overlay の scroll lock が
+ * document に capture フェーズで効き、FCK パネル内の wheel/touchmove スクロールが
+ * 奪われる（スクロールバードラッグでしか動かない）。
  *
- * content script は live_chat_replay iframe で動くため、まず自 document を見る。
- * 念のため parent document（watch ページ側、同一 origin）も走査する。
+ * 実機診断で確認した事実（hotfix-3、2026-05-30）:
+ * - `tp-yt-iron-dropdown` は `.close()` を公開していない（hotfix-2 アプローチは no-op）
+ * - **Escape キー dispatch** で `ytd-menu-popup-renderer` が閉じ scroll lock 解放
+ * - 常設要素（`yt-sort-filter-sub-menu-renderer` / `yt-dropdown-menu`）はメニュー
+ *   と無関係なので触らない（無条件操作は副作用大）
+ *
+ * 無条件 Escape dispatch はフルスクリーン解除等の副作用があるため、**visible な
+ * `ytd-menu-popup-renderer` が存在する時のみ** dispatch する gating を必ず通す。
+ *
+ * タイミング安全性: 本関数は `openStatsPanel` 冒頭（StatsPanel の createRoot/render
+ * より前）で呼ばれるため、StatsPanel 自身の Escape ハンドラ（useModalA11y）は
+ * まだ mount されておらず反応しない＝ YouTube メニューのみが閉じる。
+ *
+ * content script は live_chat_replay iframe で動くので自 document を見る。
+ * 念のため parent document（watch 側、同一 origin）も走査する。
  */
 function closeYouTubeNativeDropdowns(): void {
   const docs: Document[] = [];
   if (typeof document !== 'undefined') docs.push(document);
   try {
-    const parentDoc =
-      typeof window !== 'undefined' && window.parent !== window
-        ? window.parent.document
-        : null;
-    if (parentDoc && !docs.includes(parentDoc)) docs.push(parentDoc);
+    if (
+      typeof window !== 'undefined' &&
+      window.parent !== window &&
+      window.parent.document &&
+      !docs.includes(window.parent.document)
+    ) {
+      docs.push(window.parent.document);
+    }
   } catch {
     // cross-origin 例外ガード（YouTube は同一 origin なので通常到達しない）
   }
 
-  for (const doc of docs) {
-    let dropdowns: NodeListOf<Element>;
+  const isPopupOpen = (doc: Document): boolean => {
     try {
-      dropdowns = doc.querySelectorAll('tp-yt-iron-dropdown');
+      return Array.from(doc.querySelectorAll('ytd-menu-popup-renderer')).some(
+        (el) => (el as HTMLElement).offsetParent !== null,
+      );
     } catch {
-      continue;
+      return false;
     }
-    dropdowns.forEach((d) => {
-      const el = d as Element & { opened?: boolean; close?: () => void };
-      const isOpen =
-        el.opened === true || d.getAttribute('aria-hidden') === 'false';
-      if (isOpen && typeof el.close === 'function') {
-        try {
-          el.close();
-        } catch {
-          // close 失敗は無視（YouTube 実装変更耐性）
-        }
-      }
-    });
+  };
+
+  for (const doc of docs) {
+    if (!isPopupOpen(doc)) continue;
+    try {
+      doc.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'Escape',
+          code: 'Escape',
+          keyCode: 27,
+          which: 27,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    } catch {
+      // dispatch 失敗は無視（KeyboardEvent コンストラクタ未対応の古い環境保険）
+    }
   }
 }
 
