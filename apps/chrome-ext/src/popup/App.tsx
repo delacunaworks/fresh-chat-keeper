@@ -31,7 +31,9 @@ import { CollectionConsentModal } from './CollectionConsentModal.js';
 import { CollectionRevokeConfirmModal } from './CollectionRevokeConfirmModal.js';
 import { CategoryFilters } from './tabs/CategoryFilters.js';
 import { UserBlocklist } from './tabs/UserBlocklist.js';
+import { UserFlagging } from './tabs/UserFlagging.js';
 import { FirstTimeV3Notice } from './FirstTimeV3Notice.js';
+import { FlaggingIntroduction } from './FlaggingIntroduction.js';
 import { ensureGameplayHintsForCategories } from '../content/stage-dispatch.js';
 import type { CategorySettings } from '../shared/settings.js';
 import type { KBGame } from '@fresh-chat-keeper/knowledge-base';
@@ -149,11 +151,12 @@ function SegmentedControl({
 
 // ─── タブバー（a11y: role=tablist + roving tabindex + 矢印キー）──────────
 
-type TabId = 'basic' | 'category' | 'blocklist';
+type TabId = 'basic' | 'category' | 'flagging' | 'blocklist';
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'basic', label: '基本' },
   { id: 'category', label: 'カテゴリ' },
+  { id: 'flagging', label: 'フラグ視聴者' },
   { id: 'blocklist', label: 'ブロック' },
 ];
 
@@ -706,6 +709,7 @@ export default function App() {
       </div>
 
       <FirstTimeV3Notice onGoToCategory={() => setActiveTab('category')} />
+      <FlaggingIntroduction onGoToFlagging={() => setActiveTab('flagging')} />
 
       <TabBar active={activeTab} onChange={setActiveTab} />
 
@@ -727,6 +731,12 @@ export default function App() {
               }
             }}
           />
+        </div>
+      )}
+
+      {activeTab === 'flagging' && (
+        <div id="fck-tabpanel-flagging" role="tabpanel" aria-labelledby="fck-tab-flagging">
+          <UserFlagging settings={settings} onUpdate={update} />
         </div>
       )}
 

@@ -40,6 +40,16 @@ export const SETTINGS_V1_BACKUP_KEY = 'fck_settings_v1_backup';
  */
 export const SETTINGS_V2_BACKUP_KEY = 'fck_settings_v2_backup';
 
+/**
+ * v3 → v4 マイグレーション時のバックアップキー（Phase 3.5 / v0.5.0 新規）。
+ *
+ * v0.4.0 の version: 3 設定（categories / userBlocks / triggerVisibility）を
+ * 保持したまま v4（userFlagging 追加）に書き換える際の退避先。判定エンジン側の
+ * `FilterSettings` は引き続き v3 構造を使い、chrome-ext 内部の `Settings`
+ * 型だけが v4 に進む軽量移行（phase-3-5-user-flagging.md 改訂3）。
+ */
+export const SETTINGS_V3_BACKUP_KEY = 'fck_settings_v3_backup';
+
 /** v3 のデフォルト値（不正入力時のフォールバック） */
 function getDefaultSettings(): FilterSettings {
   return {

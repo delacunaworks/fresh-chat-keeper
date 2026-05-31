@@ -5,16 +5,20 @@
  *   - v0.2.0 以前: version フィールドなし（= v1）
  *   - v0.3.0〜v0.3.5: version: 2
  *   - v0.4.0〜（Phase 3）: version: 3
+ *   - v0.5.0〜（Phase 3.5）: version: 4（userFlagging 追加）
  *
  * 拡張更新後の最初の起動で本ローダーが:
  *   1. fck_settings を読み込む
- *   2. version === 3 ならそのまま使用（最新世代）
- *   3. version === 2 なら:
+ *   2. version === 4 ならそのまま使用（最新世代）
+ *   3. version === 3 なら:
+ *      - 旧データを `fck_settings_v3_backup` にバックアップ
+ *      - version: 4 を付与して fck_settings に書き戻す
+ *   4. version === 2 なら:
  *      - 旧データを `fck_settings_v2_backup` にバックアップ
- *      - version: 3 を付与して fck_settings に書き戻す
- *   4. version フィールドなし（v1）なら:
+ *      - version: 4 を付与して fck_settings に書き戻す
+ *   5. version フィールドなし（v1）なら:
  *      - 旧データを `fck_settings_v1_backup` にバックアップ
- *      - version: 3 を付与して fck_settings に書き戻す
+ *      - version: 4 を付与して fck_settings に書き戻す
  *
  * 設計判断:
  * - shared の {@link import('@fresh-chat-keeper/shared').migrateSettings} は
@@ -38,6 +42,7 @@
 import {
   SETTINGS_V1_BACKUP_KEY as SHARED_V1_BACKUP_KEY,
   SETTINGS_V2_BACKUP_KEY as SHARED_V2_BACKUP_KEY,
+  SETTINGS_V3_BACKUP_KEY as SHARED_V3_BACKUP_KEY,
 } from '@fresh-chat-keeper/shared';
 import {
   DEFAULT_SETTINGS,
@@ -45,8 +50,8 @@ import {
   type Settings,
 } from './settings.js';
 
-/** chrome-ext 設定の最新スキーマ世代。v0.4.0 / Phase 3 以降は 3。 */
-export const CURRENT_SETTINGS_VERSION = 3 as const;
+/** chrome-ext 設定の最新スキーマ世代。v0.5.0 / Phase 3.5 以降は 4。 */
+export const CURRENT_SETTINGS_VERSION = 4 as const;
 
 /**
  * v1 → 現行世代マイグレーション時のバックアップキー。
@@ -55,10 +60,16 @@ export const CURRENT_SETTINGS_VERSION = 3 as const;
 export const SETTINGS_V1_BACKUP_KEY = SHARED_V1_BACKUP_KEY;
 
 /**
- * v2 → v3 マイグレーション時のバックアップキー（Phase 3 新規）。
+ * v2 → 現行世代マイグレーション時のバックアップキー（Phase 3 新規）。
  * shared 定数（`fck_settings_v2_backup`）を再エクスポート。
  */
 export const SETTINGS_V2_BACKUP_KEY = SHARED_V2_BACKUP_KEY;
+
+/**
+ * v3 → v4 マイグレーション時のバックアップキー（Phase 3.5 新規）。
+ * shared 定数（`fck_settings_v3_backup`）を再エクスポート。
+ */
+export const SETTINGS_V3_BACKUP_KEY = SHARED_V3_BACKUP_KEY;
 
 /**
  * 旧名拡張時代に使用していた `flc_*` プレフィックスキー。
@@ -105,13 +116,14 @@ export type StoredSettings = Settings & { version: typeof CURRENT_SETTINGS_VERSI
 
 /**
  * chrome.storage.local から設定を読み込む。
- * 旧世代（v1 / v2）からのマイグレーションが必要な場合は自動的にバックアップを
- * 作成して v3 形式で書き戻す。
+ * 旧世代（v1 / v2 / v3）からのマイグレーションが必要な場合は自動的に
+ * バックアップを作成して v4 形式で書き戻す。
  *
  * 副作用（初回マイグレーション時のみ）:
  * - v1 → `fck_settings_v1_backup` に旧データを保存
  * - v2 → `fck_settings_v2_backup` に旧データを保存
- * - `fck_settings` を v3 形式に書き戻す
+ * - v3 → `fck_settings_v3_backup` に旧データを保存
+ * - `fck_settings` を v4 形式に書き戻す
  */
 export async function loadSettings(): Promise<Settings> {
   const result = await chrome.storage.local.get(STORAGE_KEY);
@@ -124,18 +136,23 @@ export async function loadSettings(): Promise<Settings> {
 
   const storedVersion = readStoredVersion(raw);
 
-  // 最新世代（v3）: そのまま使用
+  // 最新世代（v4）: そのまま使用
   if (storedVersion === CURRENT_SETTINGS_VERSION) {
     return stripVersion(raw as StoredSettings);
   }
 
-  // v2 → v3: fck_settings_v2_backup に退避してから書き戻し
+  // v3 → v4: fck_settings_v3_backup に退避してから書き戻し
+  if (storedVersion === 3) {
+    return await migrateToCurrentVersion(raw, SETTINGS_V3_BACKUP_KEY, 'v3 → v4');
+  }
+
+  // v2 → v4: fck_settings_v2_backup に退避してから書き戻し
   if (storedVersion === 2) {
-    return await migrateToCurrentVersion(raw, SETTINGS_V2_BACKUP_KEY, 'v2 → v3');
+    return await migrateToCurrentVersion(raw, SETTINGS_V2_BACKUP_KEY, 'v2 → v4');
   }
 
   // version なし（v1）or 不明な値 → v1 backup に退避してから書き戻し
-  return await migrateToCurrentVersion(raw, SETTINGS_V1_BACKUP_KEY, 'v1 → v3');
+  return await migrateToCurrentVersion(raw, SETTINGS_V1_BACKUP_KEY, 'v1 → v4');
 }
 
 /**
@@ -170,7 +187,7 @@ function debugTriggerVisibilityFallback(
 function stripVersion(raw: StoredSettings): Settings {
   const { version: _ignore, ...rest } = raw;
   void _ignore;
-  debugTriggerVisibilityFallback(rest as Partial<Settings>, 'v3 読み出し');
+  debugTriggerVisibilityFallback(rest as Partial<Settings>, 'v4 読み出し');
   const merged: Settings = { ...DEFAULT_SETTINGS, ...rest };
   // B4a hardening 🟡: 重要フィールドの型が壊れていたら警告して DEFAULT に補正。
   // chrome.storage は別拡張・手動編集・旧バグで型不整合が混入しうる。
@@ -199,7 +216,7 @@ function stripVersion(raw: StoredSettings): Settings {
 }
 
 /**
- * chrome.storage.local に設定を保存する。常に最新世代 `version: 3` を付与する。
+ * chrome.storage.local に設定を保存する。常に最新世代 `version: 4` を付与する。
  *
  * 直接 `chrome.storage.local.set({ [STORAGE_KEY]: ... })` を呼ぶと version
  * フィールドが剥がれて毎回マイグレーション + バックアップ再生成が走るため、
@@ -211,10 +228,10 @@ export async function saveSettings(settings: Settings): Promise<void> {
 }
 
 /**
- * 旧世代データを指定バックアップキーに退避し、v3 形式で書き戻す共通処理。
+ * 旧世代データを指定バックアップキーに退避し、v4 形式で書き戻す共通処理。
  *
  * @param raw 保存済みの旧データ（不正型もありうる）
- * @param backupKey 退避先キー（v1 or v2 backup）
+ * @param backupKey 退避先キー（v1 / v2 / v3 backup）
  * @param label ログ用のマイグレーションラベル
  */
 async function migrateToCurrentVersion(
@@ -253,7 +270,7 @@ async function migrateToCurrentVersion(
   await chrome.storage.local.set(updates);
 
   console.log(
-    `[FreshChatKeeper] 設定スキーマを v3 にマイグレーションしました（${label}、旧データは ${backupKey} に保存）`,
+    `[FreshChatKeeper] 設定スキーマを v4 にマイグレーションしました（${label}、旧データは ${backupKey} に保存）`,
   );
 
   return merged;

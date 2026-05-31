@@ -21,6 +21,37 @@ export type TriggerVisibility = 'hover_only' | 'always';
 /** Phase 3 マルチラベル新カテゴリの強度（spam は強度なし） */
 export type CategoryStrength = 'loose' | 'standard' | 'strict';
 
+/** Phase 3.5 視聴者フラグ機能の集計スコープ（B3 / v0.5.0） */
+export type UserFlaggingScope = 'session' | '7d' | '30d';
+
+/**
+ * Phase 3.5 視聴者フラグの表示スタイル（B3 / v0.5.0、設計文書 §「表示スタイル」）。
+ * - `icon`: 名前横にフラグアイコン（🟡🔴）。ROM 専層配慮の既定
+ * - `color`: ユーザー名を着色。視覚的うるささを抑えたい場合
+ * - `hover_only`: ホバー時のみ表示。最もクリーンな能動視聴者向け
+ *   （※ 改訂1 で hover 駆動 UI は撤回されたため、本オプションは
+ *   「コメント要素にカーソル乗せたときだけ CSS で可視化する表示制御」を意味する。
+ *   JS の mouseenter/leave リスナーは持たない）
+ * - `red_only`: red のみ明確表示し yellow は控えめ
+ */
+export type UserFlaggingDisplayStyle = 'icon' | 'color' | 'hover_only' | 'red_only';
+
+/**
+ * Phase 3.5 視聴者フラグ機能の設定（B3 / v0.5.0、設計文書 §「データ構造」）。
+ *
+ * - `enabled` は **オプトイン**（既定 false）。`triggerVisibility` 等の必須
+ *   フィールドと違い optional 維持の余地はあるが、本機能の有効/無効は明確に
+ *   保存しておくほうが popup の UI 状態管理が楽なので明示フィールド化
+ * - `sensitivity` は flag-evaluator が読む `{ yellow, red }`。yellow は red の
+ *   半分を既定（標準感度 red=0.4 / yellow=0.2）
+ */
+export interface UserFlaggingSettings {
+  enabled: boolean;
+  scope: UserFlaggingScope;
+  displayStyle: UserFlaggingDisplayStyle;
+  sensitivity: { yellow: number; red: number };
+}
+
 /**
  * Phase 3（v0.4.0 / P3-UI-04）で追加された新カテゴリ設定。
  *
@@ -96,6 +127,16 @@ export interface Settings {
    * 補完発動は settings-loader で debug 可視化。
    */
   triggerVisibility: TriggerVisibility;
+  /**
+   * Phase 3.5 視聴者フラグ機能の設定（B3 / v0.5.0、B5 で非 optional 化）。
+   *
+   * B5 typescript（B6a triggerVisibility と同パターン）: 非 optional。
+   * {@link DEFAULT_SETTINGS}.userFlagging が常時セットされ、settings-loader が
+   * 読み出し時に必ず DEFAULT とマージする（旧 v3 以前データに無くても補完される）
+   * ため、型と実体（常に存在）を一致させる。呼び出し側の
+   * `settings.userFlagging?.enabled` ノイズが消える。
+   */
+  userFlagging: UserFlaggingSettings;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -119,6 +160,14 @@ export const DEFAULT_SETTINGS: Settings = {
   },
   // B5-fix: 既定は hover_only（YouTube #menu と同挙動。通常は何も出さない）
   triggerVisibility: 'hover_only',
+  // Phase 3.5 / v0.5.0: 視聴者フラグ機能はオプトイン（既定 OFF）。
+  // scope='30d' / displayStyle='icon' / sensitivity 標準値（red=0.4, yellow=0.2）。
+  userFlagging: {
+    enabled: false,
+    scope: '30d',
+    displayStyle: 'icon',
+    sensitivity: { yellow: 0.2, red: 0.4 },
+  },
 };
 
 /** メイン設定のストレージキー。書き込みはポップアップのみ行う。 */

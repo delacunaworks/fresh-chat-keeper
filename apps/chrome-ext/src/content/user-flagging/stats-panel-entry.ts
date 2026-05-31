@@ -1,0 +1,344 @@
+/**
+ * Phase 3.5 B6: StatsPanel の mount / unmount ライフサイクル。
+ *
+ * `openStatsPanel(...)` で React モーダルを document.body 直下にマウントする。
+ * singleton: 既にパネルが開いていれば閉じてから開き直す。`closeCurrent` は
+ * `<StatsPanel onClose={...}>` から呼ばれる。
+ *
+ * CSS は `ensureStylesInjected()` で 1 度だけ `<style>` を `document.head` に
+ * inject する（ui-overlay と同パターン）。
+ */
+
+import { createRoot, type Root } from 'react-dom/client';
+import { createElement } from 'react';
+import { StatsPanel } from './StatsPanel.js';
+import type { SessionTracker } from './session-tracker.js';
+
+const ROOT_ELEMENT_ID = 'fck-stats-panel-root';
+const STYLE_ELEMENT_ID = 'fck-stats-panel-styles';
+
+interface MountedPanel {
+  root: Root;
+  el: HTMLElement;
+}
+
+let currentPanel: MountedPanel | null = null;
+
+/**
+ * YouTube ネイティブの 3 点メニュー（`ytd-menu-popup-renderer` を
+ * `tp-yt-iron-dropdown` がラップ）が開いていると、iron-overlay の scroll lock が
+ * document に capture フェーズで効き、FCK パネル内の wheel/touchmove スクロールが
+ * 奪われる（スクロールバードラッグでしか動かない）。
+ *
+ * 実機診断で確認した事実（hotfix-3、2026-05-30）:
+ * - `tp-yt-iron-dropdown` は `.close()` を公開していない（hotfix-2 アプローチは no-op）
+ * - **Escape キー dispatch** で `ytd-menu-popup-renderer` が閉じ scroll lock 解放
+ * - 常設要素（`yt-sort-filter-sub-menu-renderer` / `yt-dropdown-menu`）はメニュー
+ *   と無関係なので触らない（無条件操作は副作用大）
+ *
+ * 無条件 Escape dispatch はフルスクリーン解除等の副作用があるため、**visible な
+ * `ytd-menu-popup-renderer` が存在する時のみ** dispatch する gating を必ず通す。
+ *
+ * タイミング安全性: 本関数は `openStatsPanel` 冒頭（StatsPanel の createRoot/render
+ * より前）で呼ばれるため、StatsPanel 自身の Escape ハンドラ（useModalA11y）は
+ * まだ mount されておらず反応しない＝ YouTube メニューのみが閉じる。
+ *
+ * content script は live_chat_replay iframe で動くので自 document を見る。
+ * 念のため parent document（watch 側、同一 origin）も走査する。
+ */
+function closeYouTubeNativeDropdowns(): void {
+  const docs: Document[] = [];
+  if (typeof document !== 'undefined') docs.push(document);
+  try {
+    if (
+      typeof window !== 'undefined' &&
+      window.parent !== window &&
+      window.parent.document &&
+      !docs.includes(window.parent.document)
+    ) {
+      docs.push(window.parent.document);
+    }
+  } catch {
+    // cross-origin 例外ガード（YouTube は同一 origin なので通常到達しない）
+  }
+
+  const isPopupOpen = (doc: Document): boolean => {
+    try {
+      return Array.from(doc.querySelectorAll('ytd-menu-popup-renderer')).some(
+        (el) => (el as HTMLElement).offsetParent !== null,
+      );
+    } catch {
+      return false;
+    }
+  };
+
+  for (const doc of docs) {
+    if (!isPopupOpen(doc)) continue;
+    try {
+      doc.dispatchEvent(
+        new KeyboardEvent('keydown', {
+          key: 'Escape',
+          code: 'Escape',
+          keyCode: 27,
+          which: 27,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    } catch {
+      // dispatch 失敗は無視（KeyboardEvent コンストラクタ未対応の古い環境保険）
+    }
+  }
+}
+
+/**
+ * StatsPanel を開く。archive.ts の menu-manager.onStats から呼ばれる。
+ * userFlagging.enabled の gating は archive.ts 側で行う（本関数は無条件 open）。
+ */
+export function openStatsPanel(
+  streamerChannelId: string,
+  userChannelId: string,
+  userDisplayName: string,
+  sessionTracker: SessionTracker,
+): void {
+  try {
+    // YouTube ネイティブメニューが開いていると scroll lock で StatsPanel 内
+    // スクロールが効かなくなるので、最初にロックを解放する。
+    closeYouTubeNativeDropdowns();
+
+    ensureStylesInjected();
+
+    // singleton: 既存パネルがあれば閉じてから開き直す
+    if (currentPanel) {
+      closeCurrent();
+    }
+
+    const el = document.createElement('div');
+    el.id = ROOT_ELEMENT_ID;
+    document.body.appendChild(el);
+
+    const root = createRoot(el);
+    currentPanel = { root, el };
+
+    root.render(
+      createElement(StatsPanel, {
+        streamerChannelId,
+        userChannelId,
+        userDisplayName,
+        sessionTracker,
+        onClose: closeCurrent,
+      }),
+    );
+  } catch (err) {
+    console.error('[FreshChatKeeper] openStatsPanel failed:', err);
+  }
+}
+
+/** 開いているパネルを閉じる（StatsPanel onClose / open 直前のクリア / dispose）。 */
+export function closeCurrent(): void {
+  if (!currentPanel) return;
+  const { root, el } = currentPanel;
+  currentPanel = null;
+  try {
+    root.unmount();
+  } catch {
+    // unmount は冪等にはならないことがあるが、片付けを止めない
+  }
+  el.remove();
+}
+
+const STYLE_TEXT = `
+.fck-stats-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: "Roboto", "Helvetica Neue", Arial, sans-serif;
+}
+.fck-stats-panel {
+  background: #fff;
+  color: #202020;
+  width: min(420px, 92vw);
+  max-height: 88vh;
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.3);
+  display: flex;
+  flex-direction: column;
+  outline: none;
+}
+.fck-stats-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px 10px;
+  border-bottom: 1px solid #ececec;
+}
+.fck-stats-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: #202020;
+  word-break: break-all;
+}
+.fck-stats-close {
+  background: transparent;
+  border: none;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  color: #666;
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+.fck-stats-close:hover { background: #f0f0f0; }
+.fck-stats-close:focus-visible {
+  outline: 2px solid #1a73e8;
+  outline-offset: 2px;
+}
+
+.fck-stats-body {
+  padding: 14px 18px;
+  overflow-y: auto;
+  flex: 1;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.fck-stats-loading { color: #888; }
+.fck-stats-empty { color: #666; }
+.fck-stats-section { margin-bottom: 14px; }
+.fck-stats-section:last-child { margin-bottom: 0; }
+.fck-stats-observed { color: #555; font-size: 12px; margin-bottom: 6px; }
+.fck-stats-h3 {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0 0 6px;
+  color: #333;
+}
+.fck-stats-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.fck-flag-badge-red { background: #fde7e7; color: #c62828; }
+.fck-flag-badge-yellow { background: #fff4d6; color: #b8860b; }
+.fck-flag-badge-grey { background: #ececec; color: #555; }
+.fck-flag-badge-clean { background: #e3f2e8; color: #2e7d32; }
+
+.fck-stats-summary > div { margin-bottom: 2px; }
+.fck-stats-breakdown ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.fck-stats-breakdown li {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 0;
+  border-bottom: 1px dashed #f0f0f0;
+}
+.fck-stats-breakdown li:last-child { border-bottom: none; }
+.fck-stats-breakdown-zero { opacity: 0.4; }
+
+.fck-stats-footer {
+  display: flex;
+  gap: 8px;
+  padding: 12px 18px 16px;
+  border-top: 1px solid #ececec;
+}
+.fck-stats-action {
+  flex: 1;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  background: #f5f5f5;
+  color: #202020;
+}
+.fck-stats-action:hover { background: #ececec; }
+.fck-stats-action:focus-visible {
+  outline: 2px solid #1a73e8;
+  outline-offset: 2px;
+}
+.fck-stats-action:disabled { opacity: 0.5; cursor: not-allowed; }
+.fck-stats-block {
+  background: #fde7e7;
+  color: #c62828;
+  border-color: #f5c2c2;
+}
+.fck-stats-block:hover { background: #f9d3d3; }
+.fck-stats-reset {
+  background: #fff;
+  color: #555;
+  border-color: #ddd;
+}
+
+/* === DailyTimeline === */
+.fck-daily-timeline {
+  display: grid;
+  grid-template-columns: 56px repeat(7, 1fr);
+  gap: 4px;
+  margin-top: 4px;
+}
+.fck-daily-header, .fck-daily-row {
+  display: contents;
+}
+.fck-daily-row-label {
+  font-size: 11px;
+  color: #888;
+  display: flex;
+  align-items: center;
+}
+.fck-daily-dow {
+  font-size: 11px;
+  color: #888;
+  text-align: center;
+}
+.fck-daily-cell {
+  aspect-ratio: 1;
+  border-radius: 3px;
+  border: 1px solid #eee;
+  background: #fafafa;
+}
+.fck-daily-empty { background: #f5f5f5; opacity: 0.45; }
+.fck-daily-clean { background: #e8f5ec; border-color: #d4ead9; }
+.fck-daily-low { background: #fff4cf; border-color: #f0d57a; }
+.fck-daily-high { background: #fbcfcf; border-color: #f0a0a0; }
+`;
+
+function ensureStylesInjected(): void {
+  try {
+    if (document.getElementById(STYLE_ELEMENT_ID)) return;
+    const style = document.createElement('style');
+    style.id = STYLE_ELEMENT_ID;
+    style.textContent = STYLE_TEXT;
+    (document.head ?? document.documentElement).appendChild(style);
+  } catch {
+    // ignore
+  }
+}
+
+export const __test__ = {
+  ROOT_ELEMENT_ID,
+  STYLE_ELEMENT_ID,
+  hasCurrentPanel(): boolean {
+    return currentPanel !== null;
+  },
+  reset(): void {
+    if (currentPanel) {
+      try {
+        currentPanel.root.unmount();
+      } catch {
+        // ignore
+      }
+      currentPanel.el.remove();
+      currentPanel = null;
+    }
+  },
+};

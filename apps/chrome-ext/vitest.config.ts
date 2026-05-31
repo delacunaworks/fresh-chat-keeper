@@ -16,6 +16,7 @@ export default defineConfig({
       'tests/**/*.{test,spec}.ts',
       'tests/**/*.{test,spec}.tsx',
       'src/**/*.{test,spec}.ts',
+      'src/**/*.{test,spec}.tsx',
     ],
     passWithNoTests: true,
   },

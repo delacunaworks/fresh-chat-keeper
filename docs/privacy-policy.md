@@ -1,7 +1,7 @@
 # プライバシーポリシー / Privacy Policy
 
 **Fresh Chat Keeper Chrome Extension**
-最終更新 / Last updated: 2026-05-15
+最終更新 / Last updated: 2026-05-30
 
 ---
 
@@ -50,6 +50,36 @@ Fresh Chat Keeper は個人を特定できる情報を一切収集しません�
 **誤判定報告（フィルタ済み＝False Positive / 見逃し＝False Negative）**
 
 コメントのフィルタが誤っていた場合に、種別（誤フィルタ / 見逃し）と本来のカテゴリ（ネタバレ・暴言・スパム・無関係・指示厨・わからない・スキップ）を選んで報告できます。報告は端末内（最大 100 件）に蓄積されます。**opt-in 同意中の場合のみ**、後述の収集 API にも並行送信されます（同意していない場合は端末内のみ）。報告に含まれるのは対象コメント本文・選択カテゴリ・報告種別で、報告者ご自身の情報は含まれません。
+
+### 視聴者フラグ機能について（v0.5.0 以降）
+
+繰り返しフィルタに引っかかる視聴者を 4 段階（問題なし / 軽微 / 注意 / 要注意）で
+可視化し、ブロック判断を支援する「視聴者フラグ機能」を提供しています。
+
+**重要な特性:**
+- **デフォルトは OFF（オプトイン）** です。ポップアップの「フラグ視聴者」タブで
+  明示的に有効化した場合のみ動作します。
+- **完全にブラウザ内（`chrome.storage.local`）のみで動作し、集計データの外部送信は
+  一切ありません。** これは v0.3.5 の opt-in データ収集（サーバー送信あり）とは
+  **別物**です。
+- 配信者単位で独立して保存され、他のコミュニティに共有されることはありません。
+
+**端末内に保存する情報:**
+- 配信者のチャンネル ID
+- 視聴者の YouTube ハンドル名（2026-05 以降の YouTube 仕様変更により、UC ID では
+  なくハンドル名 `@xxx`）
+- 視聴者の表示名
+- 日別の総コメント数・カテゴリ別フィルタ該当数
+
+**保存しない情報:**
+- コメント本文（フラグ判定後に破棄。本文は保存しません）
+- 視聴者の個人情報（メールアドレス等）
+- 他の配信での視聴者の活動履歴（配信者スコープで独立、横断追跡なし）
+
+**自動削除・無効化:**
+- 追跡期間（7 日 / 30 日）を超えたデータは 1 日 1 回バックグラウンドで自動削除されます。
+- 「フラグ視聴者」タブからいつでも全データを削除できます。
+- 機能を無効化すると以降の集計は停止します。
 
 ### opt-in 同意に基づくデータ収集（v0.3.5 以降）
 
@@ -160,6 +190,39 @@ A "block" feature lets you hide comments from specific users. The blocked user's
 **Misjudgment reports (filtered = False Positive / missed = False Negative)**
 
 When a comment was filtered incorrectly, you can report it by choosing the kind (mis-filtered / missed) and the intended category (spoiler / harassment / spam / off-topic / backseat / unknown / skip). Reports are stored locally (up to 100). **Only while opt-in consent is active**, they are also sent in parallel to the collection API described below (local only if you have not consented). A report contains the target comment text, selected category, and report kind — no information about you, the reporter.
+
+### Viewer Flagging Feature (v0.5.0 and later)
+
+A "viewer flagging" feature visualizes viewers who repeatedly trigger filters
+across 4 levels (clean / minor / caution / warning) to support your blocking
+decisions.
+
+**Key characteristics:**
+- **Disabled by default (opt-in).** It works only when you explicitly enable it
+  in the "Flagged viewers" tab of the popup.
+- **It runs entirely within your browser (`chrome.storage.local`); aggregated
+  data is never sent externally.** This is **distinct** from the v0.3.5 opt-in
+  data collection (which does send to a server).
+- Data is stored per streamer and is never shared across communities.
+
+**Information stored locally:**
+- The streamer's channel ID
+- The viewer's YouTube handle (due to YouTube's 2026-05 DOM changes, the handle
+  `@xxx` rather than a UC ID)
+- The viewer's display name
+- Per-day total comment counts and per-category filtered counts
+
+**Information NOT stored:**
+- Comment text (discarded after flag judgment; bodies are not stored)
+- Viewers' personal information (email, etc.)
+- Viewers' activity history on other streams (scoped per streamer, no
+  cross-stream tracking)
+
+**Auto-deletion / disabling:**
+- Data older than the tracking window (7 / 30 days) is auto-deleted once a day
+  in the background.
+- You can delete all data at any time from the "Flagged viewers" tab.
+- Disabling the feature stops further aggregation.
 
 ### Opt-in Data Collection (v0.3.5 and later)
 

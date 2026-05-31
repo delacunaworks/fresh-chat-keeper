@@ -75,3 +75,7 @@ export { LABEL_PRECEDENCE, derivePrimary } from './stage2/label-precedence.js';
 
 export type { Stage2BatcherOptions } from './stage2/batcher.js';
 export { Stage2Batcher } from './stage2/batcher.js';
+
+// Phase 3.5（v0.5.0）視聴者フラグ機能の純粋層。
+// 永続化・DOM 介入は chrome-ext 側（B3 以降）が担当。
+export * from './user-stats/index.js';

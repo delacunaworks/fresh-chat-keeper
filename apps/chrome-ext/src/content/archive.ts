@@ -76,6 +76,22 @@ import {
   emitMisreportLog,
   shutdownCollectionEmitter,
 } from './collection-emit.js';
+// Phase 3.5（B4）: 視聴者統計の集計フック / セッション / 配信切替検出
+import { SessionTracker } from './user-flagging/session-tracker.js';
+import {
+  initStreamDetector,
+  disposeStreamDetector,
+  getCurrentStreamerChannelId,
+} from './user-flagging/stream-detector.js';
+import { initAggregator, recordAggregate } from './user-flagging/aggregator.js';
+import { applyFlagToMessage, initUiOverlay } from './user-flagging/ui-overlay.js';
+// Phase 3.5 B6: 統計詳細パネル（クリックモーダル、menu-manager onStats 経由で開く）
+import { openStatsPanel, closeCurrent as closeStatsPanel } from './user-flagging/stats-panel-entry.js';
+import {
+  flushAll as flushUserStats,
+  clearAllCached,
+} from '../shared/user-stats-store.js';
+import type { JudgmentLabel } from '@fresh-chat-keeper/judgment-engine';
 
 /** YouTube チャットリプレイのメッセージコンテナ */
 const ITEMS_SELECTOR = '#items';
@@ -127,9 +143,50 @@ function shutdownOnInvalidContext(): void {
   // Phase 2.5: ingest バッファをフラッシュ（拡張更新前に直近のログを救う）。
   // chrome.runtime が無効化されている場合 fetch も失敗するが try で保護される。
   void shutdownCollectionEmitter();
+  // Phase 3.5: stream-detector 停止 + 未 flush の userStats を救う
+  disposeStreamDetector();
+  void flushUserStats();
+  // Phase 3.5 B6: 開いていれば StatsPanel を片付け（context 喪失時の DOM leak 防止）
+  closeStatsPanel();
 }
 
 // ─── モジュールスコープ状態 ───────────────────────────────────────────────────
+
+/**
+ * Phase 3.5（B4）: 視聴者統計セッショントラッカー singleton。
+ * stream-detector が配信切替時に startNewSession を呼び、aggregator が
+ * recordMessage を呼ぶ。userFlagging.enabled=false でも生成は維持（リクエスト
+ * が来てから enabled をチェック）し、メモリコストは Map ひとつ分で軽量。
+ */
+const sessionTracker = new SessionTracker();
+
+/**
+ * Phase 3.5 B6: 行内メニューの「📊 統計を見る」を userFlagging.enabled に
+ * 追従させる。enabled=true なら openStatsPanel を注入、false なら undefined を
+ * 入れて button を非表示化（menu-manager 側で `if (cb.onStats)` ガード）。
+ *
+ * クロージャ内で getCurrentStreamerChannelId をクリック時に都度評価するため、
+ * 配信切替後の最新 streamerChannelId が反映される。streamerChannelId が
+ * 取れなければ no-op（warn 出して見送り）。
+ */
+function applyOnStatsCallback(enabled: boolean): void {
+  if (!enabled) {
+    actionMenuManager.setOnStats(undefined);
+    // 既に開いていたパネルがあれば閉じる（OFF 切替時の取り残し防止）
+    closeStatsPanel();
+    return;
+  }
+  actionMenuManager.setOnStats((channelId, displayName) => {
+    const streamerId = getCurrentStreamerChannelId();
+    if (!streamerId) {
+      console.warn(
+        '[FreshChatKeeper] StatsPanel skip: streamerChannelId 未取得（DOM 抽出待ち / 失敗）',
+      );
+      return;
+    }
+    openStatsPanel(streamerId, channelId, displayName, sessionTracker);
+  });
+}
 
 let currentSettings: Settings | null = null;
 let currentKeywords: Set<string> = new Set();
@@ -276,6 +333,8 @@ export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
     // 告知 + 再送可能化する。成功時のみ menu-manager が完了告知 + close。
     onReport: (target, reportedLabel, reportKind) =>
       handleReport(target.messageEl, target.text, reportedLabel, reportKind),
+    // Phase 3.5 B6: 起動時の onStats は loadSettings 完了後に setOnStats で
+    // 流し込む（initial settings がまだ読めていないため init には渡さない）。
   });
 
   // Stage 2 キャッシュの読み込みとトークン取得を並行して初期化
@@ -314,6 +373,33 @@ export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
       // 呼んで二段構えにする（後勝ち）。
       void initCollectionEmitter(settings.collectionApiUrl, anonToken);
 
+      // Phase 3.5: 視聴者フラグ機能の集計パイプライン起動。enabled でも OFF でも
+      // 初期化は行う（onChanged で OFF→ON 切替に追従できるように）。
+      // stream-detector の polling は enabled に関わらず安全（取得した
+      // streamerChannelId は recordAggregate が enabled チェックで gating）。
+      initStreamDetector(sessionTracker);
+      initAggregator(settings, sessionTracker);
+      // Phase 3.5 B5: DOM overlay 起動。CSS 即注入 + body 属性で表示モード反映。
+      // 設定 onChanged の subscriber を内部で立てるので、enabled / displayStyle /
+      // sensitivity / scope 変更時に L2 cache クリア + 必要に応じて既存 DOM 再適用が走る。
+      initUiOverlay(settings, sessionTracker);
+      // Phase 3.5 B6: 行内メニュー「📊 統計を見る」を userFlagging.enabled に応じて
+      // 表示/非表示する。setOnStats(undefined) で button 非表示（未注入と同等）。
+      applyOnStatsCallback(settings.userFlagging.enabled);
+
+      // Phase 3.5: タブ離脱時に未 flush の userStats を救う。
+      // Promise を await できないが chrome.storage.local.set は内部で
+      // commit に近い同期挙動なので fire-and-forget で十分。
+      // window 直接アクセスは content script で安全（iframe / parent
+      // ではなく content script 自身のグローバル）。
+      try {
+        window.addEventListener('beforeunload', () => {
+          void flushUserStats();
+        });
+      } catch {
+        // 非ブラウザ環境では何もしない（テスト / 異常系の保険）
+      }
+
       chrome.storage.onChanged.addListener((changes, area) => {
         if (area !== 'local' || !changes[STORAGE_KEY]) return;
         const prev = changes[STORAGE_KEY].oldValue as Settings | undefined;
@@ -331,6 +417,26 @@ export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
 
         currentSettings = next;
         currentKeywords = buildKeywordsFromSettings(next);
+
+        // Phase 3.5: userFlagging.sensitivity / scope 変更時に全 cached 無効化。
+        // displayStyle / enabled は判定値に影響しないので呼ばない（cached は判定
+        // 結果＝表示には影響しない）。enabled OFF→ON / ON→OFF は aggregator 側で
+        // 反映される（B5 が DOM 表示を update する経路は別）。
+        const prevUF = prev?.userFlagging;
+        const nextUF = next.userFlagging;
+        const sensitivityChanged =
+          JSON.stringify(prevUF?.sensitivity) !== JSON.stringify(nextUF?.sensitivity);
+        const scopeChanged = prevUF?.scope !== nextUF?.scope;
+        if (sensitivityChanged || scopeChanged) {
+          void clearAllCached();
+        }
+
+        // Phase 3.5 B6: userFlagging.enabled トグルで「📊 統計を見る」を on/off。
+        // 初期値は loadSettings 完了時に注入済み（applyOnStatsCallback 参照）。
+        const enabledChanged = prevUF?.enabled !== nextUF?.enabled;
+        if (enabledChanged) {
+          applyOnStatsCallback(nextUF?.enabled === true);
+        }
 
         // B5-fix: トリガ表示モード変更を既存トリガ全件へ即時反映（再 attach 不要）。
         const triggerVisChanged =
@@ -828,6 +934,26 @@ function emitJudgmentForElement(
     reasonJa: judgment.reasonJa,
     labelSource: judgment.labelSource,
   });
+
+  // Phase 3.5（B4）: 視聴者統計を集計。collection-emit と独立に gating される
+  // （userFlagging.enabled の cache を見て早期 return）。CollectionLabel と
+  // JudgmentLabel はメンバー集合が同一なので、ここでキャストする。識別子は
+  // YouTube 2026-05 仕様で @ハンドル名（targetAuthorChannelId）が表示名も兼ねる
+  // （attachActionBar / blockUser と同じ運用）。
+  recordAggregate({
+    user: {
+      channelId: targetAuthorChannelId,
+      displayName: targetAuthorChannelId,
+    },
+    primaryLabel: judgment.primaryLabel as JudgmentLabel,
+  });
+
+  // Phase 3.5（B5）: 該当 renderer にフラグ data 属性を付ける（CSS で表示）。
+  // 内部で userFlagging.enabled を見て早期 return するので OFF 時は no-op。
+  // async だが fire-and-forget で OK（UI 更新は数 ms 遅れても許容）。
+  if (el instanceof HTMLElement) {
+    void applyFlagToMessage(el);
+  }
 }
 
 /**
