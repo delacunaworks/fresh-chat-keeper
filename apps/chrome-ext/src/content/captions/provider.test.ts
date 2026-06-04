@@ -128,14 +128,37 @@ describe('YouTubeCaptionProvider', () => {
   it('getRecentContext: ローリング字幕の周期重複を畳む（A B A B → A B）（P5-B5 hotfix）', async () => {
     const p = provider('archive');
     doc.video.currentTime = 120;
-    // 各 segment は distinct（ingest の lastText 重複スキップを回避）だが、
-    // 連結すると A。B。A。B。 の周期になる → dedupeRepeatedPhrases で 1 周期へ。
-    p.__test__.ingest('これから次のエリアに進むよ。', 100, Date.now());
-    p.__test__.ingest('ここのボス強いけど頑張る。これから次のエリアに進むよ。', 105, Date.now());
-    p.__test__.ingest('ここのボス強いけど頑張る。', 110, Date.now());
+    // 接頭辞関係のない distinct な 2 文が交互に再出現（A B A B）→
+    // collapseRollingPrefixes は素通し、dedupeRepeatedPhrases が 1 周期へ畳む。
+    p.__test__.ingest('次のエリアに進むよ。', 100, Date.now());
+    p.__test__.ingest('ボスは強かったね。', 105, Date.now());
+    p.__test__.ingest('次のエリアに進むよ。', 110, Date.now());
+    p.__test__.ingest('ボスは強かったね。', 115, Date.now());
     const ctx = await p.getRecentContext(60);
     expect(ctx).not.toBeNull();
-    expect(ctx!.text).toBe('これから次のエリアに進むよ。ここのボス強いけど頑張る。');
+    expect(ctx!.text).toBe('次のエリアに進むよ。ボスは強かったね。');
+  });
+
+  it('getRecentContext: ライブ字幕の逐次成長を最終文 1 つに畳む（P5-B5 hotfix-2）', async () => {
+    const p = provider('archive');
+    doc.video.currentTime = 110;
+    // YouTube ライブ自動字幕が単語ずつ伸びる途中スナップショット（接頭辞成長）。
+    const grown = [
+      'なんかさ、',
+      'なんかさ、行っ',
+      'なんかさ、行ったり来',
+      'なんかさ、行ったり来たり',
+      'なんかさ、行ったり来たり戻っ',
+      'なんかさ、行ったり来たり戻ってんだよ',
+      'なんかさ、行ったり来たり戻ってんだよね',
+      'なんかさ、行ったり来たり戻ってんだよね。',
+    ];
+    grown.forEach((t, i) => p.__test__.ingest(t, 100 + i, Date.now()));
+    const ctx = await p.getRecentContext(60);
+    expect(ctx).not.toBeNull();
+    // before: "なんかさ、 なんかさ、行っ … なんかさ、…戻ってんだよね。"
+    // after : 最長 1 文に畳まれる
+    expect(ctx!.text).toBe('なんかさ、行ったり来たり戻ってんだよね。');
   });
 
   it('useable=false（短すぎ）→ null を返す', async () => {

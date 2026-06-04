@@ -3,7 +3,11 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { sanitizeCaptionText, dedupeRepeatedPhrases } from './sanitize.js';
+import {
+  sanitizeCaptionText,
+  dedupeRepeatedPhrases,
+  collapseRollingPrefixes,
+} from './sanitize.js';
 
 describe('sanitizeCaptionText', () => {
   it('効果音/状況注釈 [叫び声] [笑い] [荒い息] を除去する', () => {
@@ -65,5 +69,68 @@ describe('dedupeRepeatedPhrases', () => {
   it('感嘆符・疑問符・改行も文区切りとして扱う', () => {
     expect(dedupeRepeatedPhrases('すごい！すごい！')).toBe('すごい！');
     expect(dedupeRepeatedPhrases('本当？本当？')).toBe('本当？');
+  });
+});
+
+describe('collapseRollingPrefixes', () => {
+  it('接頭辞成長を最長（最後）に畳む', () => {
+    expect(
+      collapseRollingPrefixes([
+        'なんかさ、',
+        'なんかさ、行っ',
+        'なんかさ、行ったり来たり戻ってんだよね。',
+      ]),
+    ).toEqual(['なんかさ、行ったり来たり戻ってんだよね。']);
+  });
+
+  it('実機例: 7 段の逐次成長が 1 つに畳まれる', () => {
+    const grown = [
+      'なんかさ、',
+      'なんかさ、行っ',
+      'なんかさ、行ったり来',
+      'なんかさ、行ったり来たり',
+      'なんかさ、行ったり来たり戻っ',
+      'なんかさ、行ったり来たり戻ってんだよ',
+      'なんかさ、行ったり来たり戻ってんだよね',
+      'なんかさ、行ったり来たり戻ってんだよね。',
+    ];
+    expect(collapseRollingPrefixes(grown)).toEqual([
+      'なんかさ、行ったり来たり戻ってんだよね。',
+    ]);
+  });
+
+  it('接頭辞関係のない別発話は両方残す', () => {
+    expect(collapseRollingPrefixes(['おはよう', 'こんにちは'])).toEqual([
+      'おはよう',
+      'こんにちは',
+    ]);
+  });
+
+  it('後者が前者の接頭辞（短い）なら後者を捨てて前者（最長）を残す', () => {
+    expect(
+      collapseRollingPrefixes(['なんかさ、行ったり来たり', 'なんかさ、行っ', 'なんかさ、']),
+    ).toEqual(['なんかさ、行ったり来たり']);
+  });
+
+  it('成長 → 別発話 → 成長 が混在しても各グループを最長に畳む', () => {
+    expect(
+      collapseRollingPrefixes([
+        'あのね',
+        'あのねこれ',
+        'あのねこれ面白い',
+        'ところで',
+        'ところで腹減った',
+      ]),
+    ).toEqual(['あのねこれ面白い', 'ところで腹減った']);
+  });
+
+  it('空配列 / 空文字混在 / 単一要素', () => {
+    expect(collapseRollingPrefixes([])).toEqual([]);
+    expect(collapseRollingPrefixes(['', '  ', 'やあ'])).toEqual(['やあ']);
+    expect(collapseRollingPrefixes(['ひとつだけ'])).toEqual(['ひとつだけ']);
+  });
+
+  it('完全一致の連続は最長＝同一に畳まれる（startsWith は同値も真）', () => {
+    expect(collapseRollingPrefixes(['同じ', '同じ', '同じ'])).toEqual(['同じ']);
   });
 });

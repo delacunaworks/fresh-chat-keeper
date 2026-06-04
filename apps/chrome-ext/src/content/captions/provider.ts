@@ -23,6 +23,7 @@ import {
   evaluateCaptionQuality,
   sanitizeCaptionText,
   dedupeRepeatedPhrases,
+  collapseRollingPrefixes,
   type AudioContextProvider,
   type CaptionSegment,
   type RecentAudioContext,
@@ -185,8 +186,11 @@ export class YouTubeCaptionProvider implements AudioContextProvider {
       result = null;
     } else {
       result = {
-        // P5-B5 hotfix: 連結後にローリング字幕由来の重複文を畳む。
-        text: dedupeRepeatedPhrases(recent.map((s) => s.text).join(' ').trim()),
+        // P5-B5 hotfix/hotfix-2: 逐次成長（接頭辞）を畳んでから連結し、
+        // 残る完全一致の連続/周期重複を畳む。
+        text: dedupeRepeatedPhrases(
+          collapseRollingPrefixes(recent.map((s) => s.text)).join(' ').trim(),
+        ),
         qualityScore: quality.overallScore,
         source: 'caption',
         segmentCount: recent.length,

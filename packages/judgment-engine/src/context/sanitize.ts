@@ -88,6 +88,37 @@ function reducePeriodic(units: string[]): string[] {
   return units;
 }
 
+/**
+ * YouTube ライブ自動字幕の「逐次成長（incremental）」を畳む（P5-B5 hotfix-2）。
+ *
+ * ライブ字幕は単語ずつ text が伸びる途中スナップショットを生む:
+ *   ["なんかさ、", "なんかさ、行っ", "なんかさ、行ったり来", …, "なんかさ、…戻ってんだよね。"]
+ * 連続する断片で **前者が後者の接頭辞**（後者が前者で始まる）なら、成長中の同一
+ * 発話とみなし**最長（最後）のみ残す**。前者の方が長い（後者が前者の接頭辞）場合は
+ * 後者を捨てる（成長の逆＝稀）。接頭辞関係になければ別発話として両方残す。
+ *
+ * 完全一致の連続/周期重複は {@link dedupeRepeatedPhrases} が担当。本関数は
+ * 「伸びていく接頭辞」専用。語内反復（「よしよしよし」）・非連続再出現は対象外
+ * （実発話の可能性が高く、誤除去を避けるため触らない）。
+ */
+export function collapseRollingPrefixes(texts: string[]): string[] {
+  const out: string[] = [];
+  for (const raw of texts) {
+    const t = raw.trim();
+    if (!t) continue;
+    const last = out.length > 0 ? out[out.length - 1] : undefined;
+    if (last !== undefined && t.startsWith(last)) {
+      out[out.length - 1] = t; // 成長 → 最長に置換
+    } else if (last !== undefined && last.startsWith(t)) {
+      // t は last の接頭辞（より短い）→ 捨てる（last を保持）
+      continue;
+    } else {
+      out.push(t);
+    }
+  }
+  return out;
+}
+
 /** 末尾の区切り文字・空白を取り除いた比較用キーを返す。 */
 function stripTrailingDelimiters(s: string): string {
   let end = s.length;
