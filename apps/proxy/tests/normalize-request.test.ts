@@ -431,6 +431,29 @@ describe('normalizeRequest', () => {
       });
       expect(result.legacyFilterMode).toBe('lenient');
     });
+
+    // ─── Phase 5 P5-B4c: recentAudio（字幕文脈）の通過 ───────────────
+    it('context.recentAudio があれば JudgmentContext.recentAudio へそのまま通す', () => {
+      const result = normalizeRequest({
+        messages: [{ id: 'm', text: 'x' }],
+        context: {
+          settings: VALID_V2_SETTINGS,
+          recentAudio: { text: 'このボス強い、次の部屋行こう', qualityScore: 0.8 },
+        },
+      });
+      expect(result.context.recentAudio).toEqual({
+        text: 'このボス強い、次の部屋行こう',
+        qualityScore: 0.8,
+      });
+    });
+
+    it('context.recentAudio が無ければ recentAudio は undefined（後方互換: v0.5.0 と同一）', () => {
+      const result = normalizeRequest({
+        messages: [{ id: 'm', text: 'x' }],
+        context: { settings: VALID_V2_SETTINGS },
+      });
+      expect(result.context.recentAudio).toBeUndefined();
+    });
   });
 });
 

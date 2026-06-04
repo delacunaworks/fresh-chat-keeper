@@ -49,6 +49,10 @@ const ARCHIVE_QUALITY_THRESHOLD = 0.4;
 interface MemoEntry {
   result: RecentAudioContext | null;
   builtAt: number;
+  /** memo を構築したときの windowSeconds（異なる窓長で呼ばれたら再走査）。 */
+  windowSeconds: number;
+  /** memo を構築したときの useable しきい値（設定変更で異なれば再走査）。 */
+  threshold: number;
 }
 
 /**
@@ -123,17 +127,32 @@ export class YouTubeCaptionProvider implements AudioContextProvider {
    * 直近 `windowSeconds` 秒の発話文脈を取得する。
    *
    * - 5 秒メモ化: 直近に構築済みなら再走査せずキャッシュを返す
+   *   （ただし windowSeconds / threshold が前回と異なる場合は再走査）
    * - `evaluateCaptionQuality(...).useable === false` → **null**（呼び出し側は素通し）
+   *
+   * @param windowSeconds 参照窓（秒）
+   * @param thresholdOverride useable しきい値の上書き（P5-B4c）。
+   *   未指定なら mode 由来の既定（live 0.5 / archive 0.4）。
+   *   `settings.captionContext.qualityThreshold` 由来の値が**勝つ**（ユーザー設定優先）。
    */
-  async getRecentContext(windowSeconds: number): Promise<RecentAudioContext | null> {
+  async getRecentContext(
+    windowSeconds: number,
+    thresholdOverride?: number,
+  ): Promise<RecentAudioContext | null> {
+    const threshold = thresholdOverride ?? this.threshold;
     const now = Date.now();
-    if (this.memo && now - this.memo.builtAt < CONTEXT_MEMO_TTL_MS) {
+    if (
+      this.memo &&
+      now - this.memo.builtAt < CONTEXT_MEMO_TTL_MS &&
+      this.memo.windowSeconds === windowSeconds &&
+      this.memo.threshold === threshold
+    ) {
       return this.memo.result;
     }
 
     const currentTime = this.readVideoTime();
     const recent = this.getRecentSegments(windowSeconds, currentTime);
-    const quality = evaluateCaptionQuality(recent, windowSeconds, this.threshold);
+    const quality = evaluateCaptionQuality(recent, windowSeconds, threshold);
 
     let result: RecentAudioContext | null;
     if (!quality.useable) {
@@ -144,10 +163,13 @@ export class YouTubeCaptionProvider implements AudioContextProvider {
         qualityScore: quality.overallScore,
         source: 'caption',
         segmentCount: recent.length,
+        // text/quality と同一スナップショットの再生位置（B4c）。呼び出し側が
+        // captionCacheSignature に渡し、recentAudio とキャッシュキーを揃える。
+        currentTimeSeconds: currentTime,
       };
     }
 
-    this.memo = { result, builtAt: now };
+    this.memo = { result, builtAt: now, windowSeconds, threshold };
     return result;
   }
 

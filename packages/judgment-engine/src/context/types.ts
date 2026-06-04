@@ -78,6 +78,16 @@ export interface RecentAudioContext {
   source: 'caption' | 'whisper';
   /** 連結に使ったセグメント数。 */
   segmentCount: number;
+  /**
+   * このスナップショットを取得した時点の `video.currentTime`（秒、P5-B4c 追加）。
+   *
+   * text / qualityScore と**同一スナップショット**の再生位置。呼び出し側は
+   * これを `captionCacheSignature(true, currentTimeSeconds)` に渡してキャッシュ
+   * シグネチャを組む。text とキャッシュキーを同じ瞬間の値で揃えることで、
+   * ライブ字幕が呼び出し間で進んで recentAudio と captionSig がズレるのを防ぐ
+   * （B4b 完了報告 G-3）。取得不能なら provider が 0 を入れる。
+   */
+  currentTimeSeconds: number;
 }
 
 /**
@@ -100,8 +110,16 @@ export interface AudioContextProvider {
    *
    * **`null` = この瞬間は取得不能**（字幕 OFF / 品質低）。呼び出し側は素通し
    * （base context のまま判定する）。
+   *
+   * @param windowSeconds 参照窓（秒）
+   * @param thresholdOverride useable しきい値（0..1）の上書き（P5-B4c）。未指定なら
+   *   実装既定（YouTubeCaptionProvider は mode 由来の live 0.5 / archive 0.4）。
+   *   `settings.captionContext.qualityThreshold` 由来の値を渡すと**ユーザー設定が勝つ**。
    */
-  getRecentContext(windowSeconds: number): Promise<RecentAudioContext | null>;
+  getRecentContext(
+    windowSeconds: number,
+    thresholdOverride?: number,
+  ): Promise<RecentAudioContext | null>;
   /** 収集開始（DOM observer 起動等。実装依存）。 */
   start(): void;
   /** 収集停止（observer 解除・バッファ破棄等）。 */

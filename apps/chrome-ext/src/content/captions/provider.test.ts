@@ -80,6 +80,30 @@ describe('YouTubeCaptionProvider', () => {
     expect(ctx!.qualityScore).toBeGreaterThan(0.7);
   });
 
+  it('getRecentContext は currentTimeSeconds に video.currentTime を含む（P5-B4c）', async () => {
+    const p = provider('archive');
+    doc.video.currentTime = 137;
+    p.__test__.ingest('十分に長い字幕テキストその1です', 120, Date.now());
+    p.__test__.ingest('十分に長い字幕テキストその2です', 130, Date.now());
+    const ctx = await p.getRecentContext(60);
+    expect(ctx).not.toBeNull();
+    // text/quality と同一スナップショットの再生位置（captionSig 組み立て用）
+    expect(ctx!.currentTimeSeconds).toBe(137);
+  });
+
+  it('thresholdOverride: 高いしきい値を渡すと品質が満たず null（ユーザー設定が mode 既定に勝つ）', async () => {
+    const p = provider('archive'); // mode 既定 0.4
+    doc.video.currentTime = 120;
+    p.__test__.ingest('これから次のエリアに進むよ', 100, Date.now());
+    p.__test__.ingest('ここのボス強いけど頑張る', 110, Date.now());
+    // 既定 0.4 では useable（同一バッファ）
+    expect(await p.getRecentContext(60)).not.toBeNull();
+    // override 1.1（スコア上限 1.0 を超える）では必ず弾かれる。memo は threshold
+    // 違いで再走査され、override が evaluateCaptionQuality に確実に届く（既定 0.4 が
+    // 通る一方で override は弾く＝ユーザー設定が mode 既定に勝つことの証左）。
+    expect(await p.getRecentContext(60, 1.1)).toBeNull();
+  });
+
   it('useable=false（短すぎ）→ null を返す', async () => {
     const p = provider('archive');
     doc.video.currentTime = 105;
