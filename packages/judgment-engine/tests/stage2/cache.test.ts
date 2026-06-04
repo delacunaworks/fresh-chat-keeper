@@ -152,6 +152,51 @@ describe('JudgmentCache', () => {
     });
   });
 
+  // ─── P5-B4a: 字幕シグネチャ + 後方互換 ─────────────────────────────
+  describe('キー構築（buildKey）: captionSig（P5-B4a）', () => {
+    it('後方互換: captionSig 省略 と "nocap" 明示はバイト一致', () => {
+      const ctx = buildContext();
+      expect(cache.buildKey('hello', ctx)).toBe(cache.buildKey('hello', ctx, 'nocap'));
+    });
+
+    it('後方互換: nocap キーは v0.5.0 形式（${contextHash}:${textHash}、コロン 1 個）', () => {
+      const ctx = buildContext();
+      const key = cache.buildKey('hello', ctx, 'nocap');
+      // 字幕要素が挿入されていない = コロン区切りが 2 要素（contextHash:textHash）
+      expect(key.split(':').length).toBe(2);
+    });
+
+    it('字幕あり（c2）は nocap と異なるキー', () => {
+      const ctx = buildContext();
+      expect(cache.buildKey('hello', ctx, 'c2')).not.toBe(cache.buildKey('hello', ctx, 'nocap'));
+    });
+
+    it('字幕あり: 同じ captionSig（c2）なら同じキー', () => {
+      const ctx = buildContext();
+      expect(cache.buildKey('hello', ctx, 'c2')).toBe(cache.buildKey('hello', ctx, 'c2'));
+    });
+
+    it('字幕あり: 異なる captionSig（c2 vs c3）で別キー', () => {
+      const ctx = buildContext();
+      expect(cache.buildKey('hello', ctx, 'c2')).not.toBe(cache.buildKey('hello', ctx, 'c3'));
+    });
+
+    it('字幕ありキーは contextHash:captionSig:textHash（コロン 2 個・c2 を含む）', () => {
+      const ctx = buildContext();
+      const key = cache.buildKey('hello', ctx, 'c2');
+      expect(key.split(':').length).toBe(3);
+      expect(key.split(':')[1]).toBe('c2');
+    });
+
+    it('get/set も captionSig を尊重（c2 で set → nocap で get は別キーで miss）', async () => {
+      const ctx = buildContext();
+      await cache.set('hello', ctx, buildJudgment('m1'), 'c2');
+      expect(await cache.get('hello', ctx, 'c2')).not.toBeNull(); // 同 sig でヒット
+      expect(await cache.get('hello', ctx, 'nocap')).toBeNull(); // 別 sig（既存キャッシュ）でミス
+      expect(await cache.get('hello', ctx)).toBeNull(); // 省略=nocap でもミス
+    });
+  });
+
   describe('TTL（有効期限）', () => {
     afterEach(() => {
       vi.useRealTimers();

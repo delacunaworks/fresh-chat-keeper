@@ -57,8 +57,14 @@ export class JudgmentCache {
    * テキストはカナ正規化・トリム・小文字化を経てから FNV-1a でハッシュ化。
    * コンテキストは判定結果に影響するフィールドのみを抽出してハッシュ化する
    * （ゲームID・進行状況シグネチャ・フィルタ強度）。
+   *
+   * Phase 5 P5-B4a: optional `captionSig`（字幕シグネチャ、
+   * {@link import('../context/cache-signature.js').captionCacheSignature} 由来）を
+   * 受ける。**後方互換: `'nocap'`（既定・字幕 OFF/未配線）のときは v0.5.0 と
+   * バイト一致のキー**（`${contextHash}:${textHash}`）を返す。字幕ありのときだけ
+   * contextHash と textHash の間に要素を挿入する。配線は P5-B4b。
    */
-  buildKey(text: string, context: JudgmentContext): string {
+  buildKey(text: string, context: JudgmentContext, captionSig: string = 'nocap'): string {
     const normalized = normalizeText(text);
     const contextHash = hashString(
       JSON.stringify({
@@ -67,15 +73,23 @@ export class JudgmentCache {
         strength: context.settings.categories.spoiler.strength,
       }),
     );
-    return `${contextHash}:${hashString(normalized)}`;
+    // 後方互換: nocap のときは現行と完全同一のキー（バイト一致）。
+    if (captionSig === 'nocap') {
+      return `${contextHash}:${hashString(normalized)}`;
+    }
+    return `${contextHash}:${captionSig}:${hashString(normalized)}`;
   }
 
   /**
    * キャッシュ取得。TTL 切れの場合は内部で削除して null を返す。
    * ヒットした場合 `fromCache: true` フラグを立てた Judgment を返す。
    */
-  async get(text: string, context: JudgmentContext): Promise<Judgment | null> {
-    const key = this.buildKey(text, context);
+  async get(
+    text: string,
+    context: JudgmentContext,
+    captionSig: string = 'nocap',
+  ): Promise<Judgment | null> {
+    const key = this.buildKey(text, context, captionSig);
     const entry = await this.options.storage.get(key);
     if (!entry) return null;
     if (this.isExpired(entry)) {
@@ -88,8 +102,13 @@ export class JudgmentCache {
   /**
    * キャッシュ保存。`cachedAt` には現在時刻（Unix ms）を入れる。
    */
-  async set(text: string, context: JudgmentContext, judgment: Judgment): Promise<void> {
-    const key = this.buildKey(text, context);
+  async set(
+    text: string,
+    context: JudgmentContext,
+    judgment: Judgment,
+    captionSig: string = 'nocap',
+  ): Promise<void> {
+    const key = this.buildKey(text, context, captionSig);
     await this.options.storage.set(key, {
       judgment,
       cachedAt: Date.now(),
@@ -99,8 +118,12 @@ export class JudgmentCache {
   /**
    * 任意のキーで明示的に削除。テストや外部からのキャッシュ無効化に使う。
    */
-  async delete(text: string, context: JudgmentContext): Promise<void> {
-    const key = this.buildKey(text, context);
+  async delete(
+    text: string,
+    context: JudgmentContext,
+    captionSig: string = 'nocap',
+  ): Promise<void> {
+    const key = this.buildKey(text, context, captionSig);
     await this.options.storage.delete(key);
   }
 
