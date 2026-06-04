@@ -5,6 +5,24 @@ All notable changes to Fresh Chat Keeper will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-06-XX
+
+### Added
+- **字幕連動（実験的・オプトイン・既定 OFF）** — YouTube の字幕（CC）が表示
+  されている配信で、配信者の直近の発言を AI 判定の文脈に加え、ネタバレ等の
+  判定を補助します。字幕はブラウザ内で取得し、判定リクエストに含めて送信する
+  のは ON のときのみ。ゲーム実況など自動字幕が少ない配信では効果は限定的で、
+  その場合は何もせず通常どおり動作します
+- ポップアップに「字幕連動」タブ（ON/OFF・参照窓・品質しきい値）
+
+### Changed
+- 設定スキーマ v5 へマイグレーション（v1〜v4 から自動移行、後方互換。字幕連動
+  OFF のユーザーは v0.5.0 と完全に同一の挙動）
+
+### Fixed
+- 新規ユーザーのデフォルトゲーム選択が「逆転裁判」になっていた問題を修正
+  （'none' = 未選択に変更）
+
 ## [0.5.0] - 2026-05-30
 
 ### Added

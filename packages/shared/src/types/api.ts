@@ -31,6 +31,15 @@ export interface JudgeRequest {
   context?: {
     game?: GameContext;
     settings: FilterSettings;
+    /**
+     * Phase 5（v0.6.0 / P5-B4c）字幕連動: 配信者の直近 N 秒の発話文脈。
+     * `captionContext.enabled === true` のクライアントだけが送る（既定 OFF）。
+     * proxy はこれを Stage 2 prompt の Block3（`cache_control` なし）に乗せる。
+     * **MVP の API 契約追加はこの 1 フィールドのみ**（`streamSummary` は送らない。
+     * 後段 rolling summary は proxy が別経路で引く。phase-5-audio-context.md
+     * §「API 契約の境界」）。
+     */
+    recentAudio?: { text: string; qualityScore: number };
   };
   /**
    * ユーザーティア。Phase 2 では optional（未指定時は 'free' 扱い）。

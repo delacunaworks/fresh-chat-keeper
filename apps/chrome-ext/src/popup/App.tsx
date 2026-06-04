@@ -32,6 +32,7 @@ import { CollectionRevokeConfirmModal } from './CollectionRevokeConfirmModal.js'
 import { CategoryFilters } from './tabs/CategoryFilters.js';
 import { UserBlocklist } from './tabs/UserBlocklist.js';
 import { UserFlagging } from './tabs/UserFlagging.js';
+import { CaptionContext } from './tabs/CaptionContext.js';
 import { FirstTimeV3Notice } from './FirstTimeV3Notice.js';
 import { FlaggingIntroduction } from './FlaggingIntroduction.js';
 import { ensureGameplayHintsForCategories } from '../content/stage-dispatch.js';
@@ -151,12 +152,13 @@ function SegmentedControl({
 
 // ─── タブバー（a11y: role=tablist + roving tabindex + 矢印キー）──────────
 
-type TabId = 'basic' | 'category' | 'flagging' | 'blocklist';
+type TabId = 'basic' | 'category' | 'flagging' | 'caption' | 'blocklist';
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'basic', label: '基本' },
   { id: 'category', label: 'カテゴリ' },
   { id: 'flagging', label: 'フラグ視聴者' },
+  { id: 'caption', label: '字幕連動' },
   { id: 'blocklist', label: 'ブロック' },
 ];
 
@@ -737,6 +739,12 @@ export default function App() {
       {activeTab === 'flagging' && (
         <div id="fck-tabpanel-flagging" role="tabpanel" aria-labelledby="fck-tab-flagging">
           <UserFlagging settings={settings} onUpdate={update} />
+        </div>
+      )}
+
+      {activeTab === 'caption' && (
+        <div id="fck-tabpanel-caption" role="tabpanel" aria-labelledby="fck-tab-caption">
+          <CaptionContext settings={settings} onUpdate={update} />
         </div>
       )}
 

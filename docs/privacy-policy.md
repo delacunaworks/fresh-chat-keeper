@@ -1,7 +1,7 @@
 # プライバシーポリシー / Privacy Policy
 
 **Fresh Chat Keeper Chrome Extension**
-最終更新 / Last updated: 2026-05-30
+最終更新 / Last updated: 2026-06-XX
 
 ---
 
@@ -80,6 +80,24 @@ Fresh Chat Keeper は個人を特定できる情報を一切収集しません�
 - 追跡期間（7 日 / 30 日）を超えたデータは 1 日 1 回バックグラウンドで自動削除されます。
 - 「フラグ視聴者」タブからいつでも全データを削除できます。
 - 機能を無効化すると以降の集計は停止します。
+
+### 字幕連動について（v0.6.0 以降）
+
+YouTube の字幕（CC）が表示されている配信で、配信者の直近の発言を AI 判定の
+文脈に加え、ネタバレ等の判定を補助する「字幕連動」機能を提供しています
+（実験的機能）。
+
+**重要な特性:**
+- **デフォルトは OFF（オプトイン）** です。ポップアップの「字幕連動」タブで
+  明示的に有効化した場合のみ動作します。OFF のときは字幕を一切取得・送信せず、
+  v0.5.0 と完全に同一の挙動です。
+- ON のとき、表示されている字幕テキスト（直近 N 秒分。効果音注釈 `[..]` や
+  YouTube の設定 UI 文字列は除去済み）を、コメントと同じ判定リクエストに
+  含めて Claude へ送信します（判定用途のみ）。
+- 字幕は YouTube ページの DOM（表示中の字幕要素）から取得します。
+  **音声の録音・取得は行いません。**
+- プロキシは字幕テキストをログ保存しません（判定処理後に破棄されます）。
+- OFF にすれば、字幕テキストは一切送信されません。
 
 ### opt-in 同意に基づくデータ収集（v0.3.5 以降）
 
@@ -223,6 +241,24 @@ decisions.
   in the background.
 - You can delete all data at any time from the "Flagged viewers" tab.
 - Disabling the feature stops further aggregation.
+
+### Caption Context Feature (v0.6.0 and later)
+
+On streams where YouTube captions (CC) are displayed, a "caption context" feature
+adds the streamer's recent speech to the AI's judgment context to assist with
+spoiler and other detection (an experimental feature).
+
+**Key characteristics:**
+- **Disabled by default (opt-in).** It works only when you explicitly enable it
+  in the "Caption context" tab of the popup. While OFF, no caption text is read
+  or sent, and behavior is exactly identical to v0.5.0.
+- While ON, the displayed caption text (the last N seconds; sound-effect
+  annotations `[..]` and YouTube settings-UI strings are stripped) is included in
+  the same judgment request as the comment and sent to Claude (for judgment only).
+- Captions are read from the YouTube page DOM (the displayed caption elements).
+  **No audio is recorded or captured.**
+- The proxy does not log caption text (it is discarded after processing).
+- If you turn it OFF, no caption text is sent at all.
 
 ### Opt-in Data Collection (v0.3.5 and later)
 

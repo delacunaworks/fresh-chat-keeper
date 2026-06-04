@@ -92,6 +92,13 @@ import {
   clearAllCached,
 } from '../shared/user-stats-store.js';
 import type { JudgmentLabel } from '@fresh-chat-keeper/judgment-engine';
+// Phase 5 P5-B3: 字幕 DOM 抽出プロバイダ（収集）。P5-B4c: 判定への配線。
+import { createAudioContextProvider } from './captions/factory.js';
+import { qualityThresholdToNumber } from './captions/quality-threshold.js';
+import {
+  captionCacheSignature,
+  type AudioContextProvider,
+} from '@fresh-chat-keeper/judgment-engine';
 
 /** YouTube チャットリプレイのメッセージコンテナ */
 const ITEMS_SELECTOR = '#items';
@@ -148,6 +155,11 @@ function shutdownOnInvalidContext(): void {
   void flushUserStats();
   // Phase 3.5 B6: 開いていれば StatsPanel を片付け（context 喪失時の DOM leak 防止）
   closeStatsPanel();
+  // Phase 5 P5-B3: 字幕プロバイダ停止（observer 解除 + バッファ破棄）
+  captionProvider?.stop();
+  captionProvider = null;
+  // P5-B4c: 字幕スナップショットも nocap に戻す（context 喪失後の残留防止）
+  captionSnapshot = { captionSig: 'nocap' };
 }
 
 // ─── モジュールスコープ状態 ───────────────────────────────────────────────────
@@ -159,6 +171,65 @@ function shutdownOnInvalidContext(): void {
  * が来てから enabled をチェック）し、メモリコストは Map ひとつ分で軽量。
  */
 const sessionTracker = new SessionTracker();
+
+/**
+ * Phase 5 P5-B3: 字幕 DOM 抽出プロバイダ。startArchiveMode で生成 + start し、
+ * shutdownOnInvalidContext で stop する。MVP B3 では「字幕を収集するだけ」で判定には
+ * 未接続（注入は P5-B4b、enabled gating は P5-B4c）。配信切替時は stream-detector の
+ * onStreamChange フックで reset される。
+ */
+let captionProvider: AudioContextProvider | null = null;
+
+/**
+ * Phase 5 P5-B4c: 字幕文脈の同期スナップショット。
+ *
+ * キャッシュキー（{@link buildStage2CacheKey} の captionSig）は processComment の
+ * **同期パス**で必要だが、{@link AudioContextProvider.getRecentContext} は async。
+ * そこで provider の結果を本モジュールスコープにキャッシュし、processComment は
+ * `captionSig` を同期で読み、Stage 2 バッチ送信時は同じスナップショットの
+ * `recentAudio` を proxy に送る（captionSig と recentAudio を同一スナップショットで
+ * 揃える、B4b 完了報告 G-2/G-3）。
+ *
+ * captionSig はバケット（既定 30 秒）粒度なので 30 秒間は安定し、processComment と
+ * バッチ送信が同一バケットを共有する（境界跨ぎは稀かつ次バケットで自己補正）。
+ * provider 側で 5 秒メモ化済みなので {@link refreshCaptionSnapshot} の頻繁呼び出しは安価。
+ *
+ * **captionContext.enabled=false（既定・大多数）では常に `{ captionSig: 'nocap' }`**
+ * → キャッシュキーは v0.5.0 とバイト一致、recentAudio 非送信（完全後方互換）。
+ */
+let captionSnapshot: {
+  recentAudio?: { text: string; qualityScore: number };
+  captionSig: string;
+} = { captionSig: 'nocap' };
+
+/**
+ * 字幕スナップショットを最新化する（async）。captionContext.enabled のときだけ
+ * provider から直近文脈を取得し、{@link captionSnapshot} を更新する。OFF / provider
+ * 無し / 品質低（getRecentContext が null）なら `{ captionSig: 'nocap' }` にリセット。
+ *
+ * provider の 5 秒メモ化により頻繁に呼んでも DOM 全走査は走らない。
+ * processComment から fire-and-forget で（次メッセージのキー鮮度維持）、
+ * drainStage2Queue から await で（送信直前の recentAudio 鮮度確保）呼ぶ。
+ */
+async function refreshCaptionSnapshot(): Promise<void> {
+  if (!currentSettings?.captionContext.enabled || !captionProvider) {
+    captionSnapshot = { captionSig: 'nocap' };
+    return;
+  }
+  const threshold = qualityThresholdToNumber(currentSettings.captionContext.qualityThreshold);
+  const rc = await captionProvider.getRecentContext(
+    currentSettings.captionContext.windowSeconds,
+    threshold,
+  );
+  if (rc) {
+    captionSnapshot = {
+      recentAudio: { text: rc.text, qualityScore: rc.qualityScore },
+      captionSig: captionCacheSignature(true, rc.currentTimeSeconds),
+    };
+  } else {
+    captionSnapshot = { captionSig: 'nocap' };
+  }
+}
 
 /**
  * Phase 3.5 B6: 行内メニューの「📊 統計を見る」を userFlagging.enabled に
@@ -373,11 +444,24 @@ export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
       // 呼んで二段構えにする（後勝ち）。
       void initCollectionEmitter(settings.collectionApiUrl, anonToken);
 
+      // Phase 5 P5-B3/B4c: 字幕プロバイダを生成 + start。
+      // initStreamDetector より前に作り、配信切替フック（onStreamChange）で
+      // 字幕バッファを reset させる。収集は常に動くが、判定への注入
+      // （recentAudio 送信 + captionSig キー混入）は processComment / drain で
+      // captionContext.enabled を gating する（refreshCaptionSnapshot 参照）。
+      // enabled=false（既定）なら captionSig='nocap' + recentAudio 非送信で v0.5.0 同一。
+      captionProvider = createAudioContextProvider(
+        settings,
+        currentPageMode === 'live' ? 'live' : 'archive',
+      );
+      captionProvider.start();
+
       // Phase 3.5: 視聴者フラグ機能の集計パイプライン起動。enabled でも OFF でも
       // 初期化は行う（onChanged で OFF→ON 切替に追従できるように）。
       // stream-detector の polling は enabled に関わらず安全（取得した
       // streamerChannelId は recordAggregate が enabled チェックで gating）。
-      initStreamDetector(sessionTracker);
+      // P5-B3: 配信切替時に字幕バッファをリセット（同じフックに相乗り）。
+      initStreamDetector(sessionTracker, () => captionProvider?.reset?.());
       initAggregator(settings, sessionTracker);
       // Phase 3.5 B5: DOM overlay 起動。CSS 即注入 + body 属性で表示モード反映。
       // 設定 onChanged の subscriber を内部で立てるので、enabled / displayStyle /
@@ -737,6 +821,12 @@ function processMessage(el: Element, isReprocess = false): void {
   }
 
   // ── Stage 2: キーワード単体マッチ → プロキシへ委託 ──────────────────────────
+  // P5-B4c: 字幕スナップショットを fire-and-forget で最新化（次メッセージのキー
+  // 鮮度維持。provider 5 秒メモ化で DOM 全走査は走らず安価）。本メッセージの
+  // キャッシュキーには現スナップショットの captionSig を使う。captionContext.enabled
+  // =false（既定・大多数）では captionSig は常に 'nocap' → v0.5.0 とバイト一致。
+  void refreshCaptionSnapshot();
+  const captionSig = captionSnapshot.captionSig;
   const stage2keyword = matchesKeywordForStage2(text, currentKeywords);
   if (!stage2keyword) {
     // 指示・攻略ヒント系フレーズ（gameplay-hints の stage2_phrases）を Stage 2 へ。
@@ -757,7 +847,7 @@ function processMessage(el: Element, isReprocess = false): void {
       const hintPhrase = matchesGameplayHintForStage2(text, currentGenreTemplates);
       if (hintPhrase !== null) {
         const progress = currentSettings.progressByGame[currentSettings.gameId];
-        const cacheKey = buildStage2CacheKey(currentSettings.gameId, progress, text);
+        const cacheKey = buildStage2CacheKey(currentSettings.gameId, progress, text, captionSig);
         const cached = getCachedVerdict(cacheKey);
         if (cached !== null) {
           applyStage2Verdict({ text, el: new WeakRef(el), cacheKey, matchedKeyword: hintPhrase }, cached);
@@ -773,7 +863,7 @@ function processMessage(el: Element, isReprocess = false): void {
     if (currentSettings.gameId === 'other' && currentGenreTemplates.length > 0) {
       const genreKeyword = matchesGenreKeywordForStage2(text, currentGenreTemplates);
       if (genreKeyword) {
-        const cacheKey = buildStage2CacheKey('other', undefined, text);
+        const cacheKey = buildStage2CacheKey('other', undefined, text, captionSig);
         const cached = getCachedVerdict(cacheKey);
         if (cached !== null) {
           applyStage2Verdict({ text, el: new WeakRef(el), cacheKey, matchedKeyword: genreKeyword }, cached);
@@ -788,7 +878,7 @@ function processMessage(el: Element, isReprocess = false): void {
   }
 
   const progress = currentSettings.progressByGame[currentSettings.gameId];
-  const cacheKey = buildStage2CacheKey(currentSettings.gameId, progress, text);
+  const cacheKey = buildStage2CacheKey(currentSettings.gameId, progress, text, captionSig);
 
   // キャッシュ済みなら即時適用
   const cached = getCachedVerdict(cacheKey);
@@ -860,7 +950,18 @@ async function drainStage2Queue(): Promise<void> {
       const batch = stage2Queue.splice(0, 5);
       // clearStage2Queue() との非同期レースでバッチが空になる場合があるため送信をスキップ
       if (batch.length === 0) break;
-      const success = await sendStage2Batch(batch, currentSettings, anonToken, applyStage2Verdict, currentVideoTitle);
+      // P5-B4c: 送信直前に字幕スナップショットを最新化し、その recentAudio を proxy へ。
+      // captionContext.enabled=false（既定）では captionSnapshot.recentAudio は
+      // undefined のまま → context に乗らず v0.5.0 と完全同一のペイロード。
+      await refreshCaptionSnapshot();
+      const success = await sendStage2Batch(
+        batch,
+        currentSettings,
+        anonToken,
+        applyStage2Verdict,
+        currentVideoTitle,
+        captionSnapshot.recentAudio,
+      );
       if (success) await incrementStage2Usage(batch.length);
 
       if (stage2Queue.length > 0) {

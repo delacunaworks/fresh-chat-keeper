@@ -293,6 +293,74 @@ describe('buildSystemPrompt: Block 2 (dynamic context)', () => {
   });
 });
 
+// ─── Block 3: 字幕連動（Phase 5 / P5-B4c）────────────────────────
+describe('buildSystemPrompt: Block 3 (audio context)', () => {
+  it('recentAudio なし（既定）では Block3 を出力しない（後方互換: 2 ブロックのまま）', () => {
+    const ctx = buildContext({ game: { gameId: 'g', progressType: 'none' } });
+    const blocks = buildSystemPrompt(ctx, { supportsCaching: true });
+    expect(blocks).toHaveLength(2);
+    // 字幕セクションの見出しがどのブロックにも出ない
+    for (const b of blocks) {
+      expect(b.text).not.toContain('配信者の直近の発言');
+    }
+  });
+
+  it('recentAudio あり → Block3 が追加され、発話テキストを含む', () => {
+    const ctx: JudgmentContext = {
+      ...buildContext({ game: { gameId: 'g', progressType: 'none' } }),
+      recentAudio: { text: 'このボス強いな、次の部屋行こう', qualityScore: 0.8 },
+    };
+    const blocks = buildSystemPrompt(ctx, { supportsCaching: true });
+    expect(blocks).toHaveLength(3);
+    expect(blocks[2].text).toContain('配信者の直近の発言');
+    expect(blocks[2].text).toContain('このボス強いな、次の部屋行こう');
+  });
+
+  it('Block3 には cache_control を付けない（supportsCaching: true でも）', () => {
+    const ctx: JudgmentContext = {
+      ...buildContext({ game: { gameId: 'g', progressType: 'none' } }),
+      recentAudio: { text: '十分に長い配信者の直近発話テキスト', qualityScore: 0.7 },
+    };
+    const blocks = buildSystemPrompt(ctx, { supportsCaching: true });
+    // Block1 / Block2 はキャッシュ境界、Block3 は動的なので境界外
+    expect(blocks[0].cache_control).toEqual({ type: 'ephemeral' });
+    expect(blocks[1].cache_control).toEqual({ type: 'ephemeral' });
+    expect(blocks[2].cache_control).toBeUndefined();
+  });
+
+  it('streamSummary あり → 累積文脈セクションが出る（MVP では通常 undefined だが分岐を保護）', () => {
+    const ctx: JudgmentContext = {
+      ...buildContext({ game: { gameId: 'g', progressType: 'none' } }),
+      streamSummary: { text: 'これまでに第1章をクリアした' },
+    };
+    const blocks = buildSystemPrompt(ctx, { supportsCaching: true });
+    expect(blocks).toHaveLength(3);
+    expect(blocks[2].text).toContain('配信の累積文脈');
+    expect(blocks[2].text).toContain('これまでに第1章をクリアした');
+  });
+
+  it('recentAudio + streamSummary 両方 → 1 つの Block3 に両セクション', () => {
+    const ctx: JudgmentContext = {
+      ...buildContext({ game: { gameId: 'g', progressType: 'none' } }),
+      recentAudio: { text: '直近の発言テキスト', qualityScore: 0.6 },
+      streamSummary: { text: '累積要約テキスト' },
+    };
+    const blocks = buildSystemPrompt(ctx, { supportsCaching: true });
+    expect(blocks).toHaveLength(3);
+    expect(blocks[2].text).toContain('累積要約テキスト');
+    expect(blocks[2].text).toContain('直近の発言テキスト');
+  });
+
+  it('recentAudio.text が空白のみなら Block3 を出力しない', () => {
+    const ctx: JudgmentContext = {
+      ...buildContext({ game: { gameId: 'g', progressType: 'none' } }),
+      recentAudio: { text: '   ', qualityScore: 0.5 },
+    };
+    const blocks = buildSystemPrompt(ctx, { supportsCaching: true });
+    expect(blocks).toHaveLength(2);
+  });
+});
+
 // ─── buildUserPrompt ─────────────────────────────────────────────
 describe('buildUserPrompt', () => {
   it('単一メッセージを正しく整形', () => {

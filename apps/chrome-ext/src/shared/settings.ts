@@ -52,6 +52,29 @@ export interface UserFlaggingSettings {
   sensitivity: { yellow: number; red: number };
 }
 
+/** Phase 5 字幕連動の参照窓（秒、v0.6.0 / caption MVP）。 */
+export type CaptionWindowSeconds = 30 | 60 | 120;
+
+/**
+ * Phase 5 字幕品質しきい値のプリセット（v0.6.0）。
+ * 数値しきい値（loose 0.3 / standard 0.4 / strict 0.5 等）への変換は
+ * P5-B4c/B5 の責務。本層は型と既定のみ持つ。
+ */
+export type CaptionQualityThreshold = 'loose' | 'standard' | 'strict';
+
+/**
+ * Phase 5 字幕連動の設定（v0.6.0 / caption MVP で追加）。
+ *
+ * 既定 OFF（オプトイン）。`enabled` が true のときのみ字幕を Stage 2 判定の
+ * コンテキストに乗せる（P5-B4c）。`userFlagging` と同じく非 optional + DEFAULT
+ * マージで自動補完される（B5 supplement で確立したパターン）。
+ */
+export interface CaptionContextSettings {
+  enabled: boolean;
+  windowSeconds: CaptionWindowSeconds;
+  qualityThreshold: CaptionQualityThreshold;
+}
+
 /**
  * Phase 3（v0.4.0 / P3-UI-04）で追加された新カテゴリ設定。
  *
@@ -137,11 +160,21 @@ export interface Settings {
    * `settings.userFlagging?.enabled` ノイズが消える。
    */
   userFlagging: UserFlaggingSettings;
+  /**
+   * Phase 5 字幕連動の設定（v0.6.0 / caption MVP）。非 optional。
+   * {@link DEFAULT_SETTINGS}.captionContext が常時セットされ、settings-loader が
+   * 読み出し時に必ず DEFAULT とマージする（旧 v4 以前データに無くても補完される）。
+   * `userFlagging` と同型パターン。既定 OFF（オプトイン）。
+   */
+  captionContext: CaptionContextSettings;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
   enabled: true,
-  gameId: 'ace-attorney-1',
+  // 既定は「ゲームを選択しない」。以前はテスト用 placeholder の 'ace-attorney-1' が
+  // 既定のまま出荷されており、新規ユーザーに無関係なゲームが選択済みに見えていた
+  // （CLAUDE.md 既知問題）。'none' なら popup の「ゲームを選択しない」が初期選択になる。
+  gameId: 'none',
   progressByGame: {},
   filterMode: 'standard',
   displayMode: 'placeholder',
@@ -167,6 +200,13 @@ export const DEFAULT_SETTINGS: Settings = {
     scope: '30d',
     displayStyle: 'icon',
     sensitivity: { yellow: 0.2, red: 0.4 },
+  },
+  // Phase 5 / v0.6.0: 字幕連動はオプトイン（既定 OFF）。enabled が true の
+  // ときのみ字幕を判定コンテキストに乗せる（P5-B4c）。
+  captionContext: {
+    enabled: false,
+    windowSeconds: 60,
+    qualityThreshold: 'standard',
   },
 };
 

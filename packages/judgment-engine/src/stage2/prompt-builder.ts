@@ -82,6 +82,17 @@ export function buildSystemPrompt(
     });
   }
 
+  // Block 3: 字幕連動（Phase 5 / P5-B4c）。配信者の直近発話 + 後段 streamSummary。
+  // **cache_control を絶対に付けない**: 字幕は秒で変わるため、ここにキャッシュ境界を
+  // 置くと Block1/Block2 のプロンプトキャッシュ割引（最大 90%）まで失う
+  // （phase-5-audio-context.md §「prompt 配置: cache_control 境界の外」）。
+  // recentAudio も streamSummary も無ければ Block3 自体を出力しない（後方互換:
+  // captionContext.enabled=false の大多数では context.recentAudio が undefined）。
+  const block3 = buildAudioContextBlock(context);
+  if (block3) {
+    blocks.push({ type: 'text', text: block3 });
+  }
+
   return blocks;
 }
 
@@ -235,6 +246,40 @@ function buildDynamicContextBlock(context: JudgmentContext): string {
   const sections: string[] = [];
   if (gameSection) sections.push(gameSection);
   if (settingsSection) sections.push(settingsSection);
+  return sections.join('\n\n');
+}
+
+// ─── 内部実装: Block 3（字幕連動、cache_control なし）─────────────────────────
+
+/**
+ * Block 3: 字幕連動（Phase 5 / P5-B4c）の動的文脈。
+ *
+ * - `streamSummary?.text`（後段 rolling summary。**MVP では常に undefined**）→
+ *   「## 配信の累積文脈」セクション
+ * - `recentAudio?.text`（MVP の字幕直近発話）→「## 配信者の直近の発言」セクション
+ *
+ * どちらも無ければ空文字列を返し、呼び出し側は Block3 自体を出力しない
+ * （= captionContext.enabled=false の大多数では従来と完全に同一のプロンプト）。
+ *
+ * **この出力は `cache_control` を付けないブロックに置かれる前提**（字幕は秒で
+ * 変わるため。{@link buildSystemPrompt} 参照）。
+ */
+function buildAudioContextBlock(context: JudgmentContext): string {
+  const summaryText = context.streamSummary?.text?.trim();
+  const recentText = context.recentAudio?.text?.trim();
+  if (!summaryText && !recentText) return '';
+
+  const sections: string[] = [];
+  if (summaryText) {
+    sections.push(`## 配信の累積文脈（これまでの配信内容の要約）\n${summaryText}`);
+  }
+  if (recentText) {
+    sections.push(
+      '## 配信者の直近の発言（直近の音声/字幕）\n' +
+        `配信者は直近で次のように発言しています:\n"${recentText}"\n` +
+        'この発言からゲームの進行状況・現在のアクションを推測し、ネタバレ判定に活用してください。',
+    );
+  }
   return sections.join('\n\n');
 }
 

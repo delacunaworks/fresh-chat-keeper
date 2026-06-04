@@ -86,6 +86,12 @@ interface NewJudgeRequest {
   context: {
     game?: GameContext;
     settings: FilterSettings;
+    /**
+     * Phase 5（v0.6.0 / P5-B4c）字幕連動: 配信者の直近発話。`captionContext.enabled`
+     * のクライアントだけが送る。normalizeRequest が JudgmentContext.recentAudio へ
+     * 通し、buildSystemPrompt が Block3（cache_control なし）に乗せる。
+     */
+    recentAudio?: { text: string; qualityScore: number };
   };
   tier?: ModelTier;
 }
@@ -250,7 +256,13 @@ function normalizeRequest(body: Record<string, unknown>): NormalizedRequest {
     const settings = newReq.context.settings;
     return {
       messages: newReq.messages,
-      context: { game: newReq.context.game, settings },
+      context: {
+        game: newReq.context.game,
+        settings,
+        // P5-B4c: 字幕文脈を JudgmentContext へ通す（あれば）。buildSystemPrompt が
+        // Block3（cache_control なし）に乗せる。無ければ従来どおり（字幕なし判定）。
+        ...(newReq.context.recentAudio ? { recentAudio: newReq.context.recentAudio } : {}),
+      },
       tier: newReq.tier ?? 'free',
       legacyFilterMode: strengthToLegacyMode(settings.categories.spoiler.strength),
     };

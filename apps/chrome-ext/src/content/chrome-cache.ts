@@ -230,11 +230,19 @@ export async function saveJudgeCacheEntry(
  * キャッシュキーを生成する。
  * ゲームID + 進行状況 + テキストの組み合わせで一意にする。
  * 同じ動画を同じ進行状況で再視聴した場合にキャッシュが有効になる。
+ *
+ * Phase 5 P5-B4a: optional `captionSig`（字幕シグネチャ、judgment-engine の
+ * {@link import('@fresh-chat-keeper/judgment-engine').captionCacheSignature} 由来）を
+ * 受ける。**後方互換: `'nocap'`（既定・字幕 OFF/未配線）のときは v0.5.0 と
+ * バイト一致のキー**（`${gameId}|${progressKey}|${text}`）を返し、既存
+ * `fck_judge_cache` を無効化しない。字幕ありのときだけ progressKey と text の間に
+ * 要素を挿入する。実際に captionSig を渡す配線は P5-B4b。
  */
 export function buildStage2CacheKey(
   gameId: string,
   progress: GameProgress | undefined,
   text: string,
+  captionSig: string = 'nocap',
 ): string {
   let progressKey = 'none';
   if (progress?.progressModel === 'chapter') {
@@ -242,5 +250,10 @@ export function buildStage2CacheKey(
   } else if (progress?.progressModel === 'event') {
     progressKey = [...(progress.completedEventIds ?? [])].sort().join(',') || 'none';
   }
-  return `${gameId}|${progressKey}|${text}`;
+  // 後方互換: nocap のときは現行と完全同一のキー（バイト一致）。
+  if (captionSig === 'nocap') {
+    return `${gameId}|${progressKey}|${text}`;
+  }
+  // 字幕ありのときだけ要素を挿入（progressKey と text の間）。
+  return `${gameId}|${progressKey}|${captionSig}|${text}`;
 }
