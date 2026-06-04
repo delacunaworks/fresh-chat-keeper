@@ -56,6 +56,12 @@ Have you ever had your enjoyment ruined by spoilers, hints, or unsolicited advic
 - "📊 View stats" next to a comment shows per-viewer breakdowns and a daily trend; the "Flagged viewers" tab supports bulk blocking
 - Off by default. All stats are stored only on your device and never sent externally (distinct from the v0.3.5 opt-in data collection)
 
+**Caption Context (new in v0.6.0, experimental, opt-in)**
+- On streams where YouTube captions (CC) are displayed, adds the streamer's recent speech to the AI's judgment context to assist spoiler and other detection
+- Captions are read in the browser; they are included in the judgment request and sent only while ON (no audio is recorded)
+- For game streams with sparse auto-captions the effect is limited — in that case it does nothing and works as usual
+- Off by default (opt-in). While OFF, behavior is exactly identical to v0.5.0
+
 **Custom Block Words**
 - Build your own block list for any words or phrases you want to hide instantly
 

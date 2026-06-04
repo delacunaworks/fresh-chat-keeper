@@ -173,17 +173,17 @@ export function CaptionContext({ settings, onUpdate }: CaptionContextProps) {
     <div>
       {!caption.enabled && (
         <div className="px-4 py-2 bg-amber-50 border-b border-amber-100 text-[11px] text-amber-700 leading-snug">
-          💡 字幕連動は初期状態では OFF です。
+          💡 字幕連動は実験的機能です。初期状態では OFF です。
         </div>
       )}
 
       {/* 有効化トグル（オプトイン） */}
-      <Row label="字幕連動">
+      <Row label="字幕連動（実験的）">
         <div className="flex items-center justify-between gap-2">
           <div className="text-xs text-gray-600 leading-snug">
-            配信者の発話（字幕）を AI 判定の文脈に使い、ネタバレ判定の精度を上げます。
+            配信者の発話（字幕）を AI 判定の文脈に加え、ネタバレ判定を補助します。
             <br />
-            既定 OFF のオプトイン機能です。
+            字幕がある配信で効く実験的機能です（既定 OFF・オプトイン）。
           </div>
           <Toggle
             checked={caption.enabled}
@@ -217,10 +217,13 @@ export function CaptionContext({ settings, onUpdate }: CaptionContextProps) {
       {/* 静的ガイダンス */}
       <Row label="この機能について">
         <ul className="text-[11px] text-gray-500 leading-snug list-disc pl-4 space-y-1">
-          <li>YouTube の字幕（CC）が表示されている配信で動作します。</li>
+          <li>
+            YouTube の字幕（CC）が表示されている配信で動作します。ゲーム実況など
+            自動字幕が少ない配信では効果が限定的です（その場合は何もせず通常どおり動作します）。
+          </li>
           <li>
             字幕はブラウザ内で取得します。Claude へ送信するのは、判定時のコメントと同様、
-            判定リクエストに含まれる直近の発話テキストのみです。
+            判定リクエストに含まれる直近の発話テキストのみです（音声の録音はしません）。
           </li>
           <li>月間のフィルタ判定の利用量がわずかに増える場合があります。</li>
         </ul>
