@@ -106,4 +106,10 @@ export interface AudioContextProvider {
   start(): void;
   /** 収集停止（observer 解除・バッファ破棄等）。 */
   stop(): void;
+  /**
+   * 配信切替時にバッファをリセットする（observer は維持）。任意実装。
+   * stateless な provider（バッファを持たない）では不要なので optional。
+   * chrome-ext 側で stream-detector の配信切替フックから呼ばれる（P5-B3）。
+   */
+  reset?(): void;
 }

@@ -36,6 +36,13 @@ let currentStreamerDisplayName = '';
 let intervalHandle: ReturnType<typeof setInterval> | null = null;
 let trackerRef: SessionTracker | null = null;
 
+/**
+ * Phase 5 P5-B3: 配信切替（新 streamerChannelId 確定）時に呼ばれる追加コールバック。
+ * 字幕プロバイダのバッファリセット等に使う（Phase 3.5 SessionTracker リセットと
+ * 同じフックに乗せる、additive・後方互換）。未注入なら何もしない。
+ */
+let onStreamChange: (() => void) | null = null;
+
 // ─── 公開 API ─────────────────────────────────────────────────────
 
 /**
@@ -45,8 +52,13 @@ let trackerRef: SessionTracker | null = null;
  *   に startNewSession を発火、warn は出さない）
  * - その後 `POLLING_INTERVAL_MS` 周期で polling
  */
-export function initStreamDetector(sessionTracker: SessionTracker): void {
+export function initStreamDetector(
+  sessionTracker: SessionTracker,
+  streamChangeCallback?: () => void,
+): void {
   trackerRef = sessionTracker;
+  // P5-B3: 配信切替フック（字幕バッファリセット等）。省略時は null（何もしない）。
+  onStreamChange = streamChangeCallback ?? null;
   // 即時 1 回チェック（archive.ts 起動直後に streamerChannelId を埋める）
   checkAndApply();
   // 既に polling 中なら二重起動しない
@@ -80,6 +92,7 @@ export function disposeStreamDetector(): void {
     intervalHandle = null;
   }
   trackerRef = null;
+  onStreamChange = null;
   currentStreamerChannelId = null;
   currentStreamerDisplayName = '';
 }
@@ -103,6 +116,8 @@ function checkAndApply(): void {
   // 呼ばない（無駄な session reset を避ける）。
   if (newId !== null && trackerRef !== null) {
     trackerRef.startNewSession(newId);
+    // P5-B3: 同じ配信切替フックで字幕バッファもリセット（注入時のみ）。
+    onStreamChange?.();
   }
 }
 

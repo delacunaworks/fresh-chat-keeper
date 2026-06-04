@@ -92,6 +92,9 @@ import {
   clearAllCached,
 } from '../shared/user-stats-store.js';
 import type { JudgmentLabel } from '@fresh-chat-keeper/judgment-engine';
+// Phase 5 P5-B3: 字幕 DOM 抽出プロバイダ（収集のみ、判定接続は P5-B4b）
+import { createAudioContextProvider } from './captions/factory.js';
+import type { AudioContextProvider } from '@fresh-chat-keeper/judgment-engine';
 
 /** YouTube チャットリプレイのメッセージコンテナ */
 const ITEMS_SELECTOR = '#items';
@@ -148,6 +151,9 @@ function shutdownOnInvalidContext(): void {
   void flushUserStats();
   // Phase 3.5 B6: 開いていれば StatsPanel を片付け（context 喪失時の DOM leak 防止）
   closeStatsPanel();
+  // Phase 5 P5-B3: 字幕プロバイダ停止（observer 解除 + バッファ破棄）
+  captionProvider?.stop();
+  captionProvider = null;
 }
 
 // ─── モジュールスコープ状態 ───────────────────────────────────────────────────
@@ -159,6 +165,14 @@ function shutdownOnInvalidContext(): void {
  * が来てから enabled をチェック）し、メモリコストは Map ひとつ分で軽量。
  */
 const sessionTracker = new SessionTracker();
+
+/**
+ * Phase 5 P5-B3: 字幕 DOM 抽出プロバイダ。startArchiveMode で生成 + start し、
+ * shutdownOnInvalidContext で stop する。MVP B3 では「字幕を収集するだけ」で判定には
+ * 未接続（注入は P5-B4b、enabled gating は P5-B4c）。配信切替時は stream-detector の
+ * onStreamChange フックで reset される。
+ */
+let captionProvider: AudioContextProvider | null = null;
 
 /**
  * Phase 3.5 B6: 行内メニューの「📊 統計を見る」を userFlagging.enabled に
@@ -373,11 +387,22 @@ export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
       // 呼んで二段構えにする（後勝ち）。
       void initCollectionEmitter(settings.collectionApiUrl, anonToken);
 
+      // Phase 5 P5-B3: 字幕プロバイダを生成 + start（収集のみ、判定未接続）。
+      // initStreamDetector より前に作り、配信切替フック（onStreamChange）で
+      // 字幕バッファを reset させる。MVP は enabled gating なし（収集だけ動く。
+      // 判定注入は P5-B4b、captionContext.enabled gating は P5-B4c）。
+      captionProvider = createAudioContextProvider(
+        settings,
+        currentPageMode === 'live' ? 'live' : 'archive',
+      );
+      captionProvider.start();
+
       // Phase 3.5: 視聴者フラグ機能の集計パイプライン起動。enabled でも OFF でも
       // 初期化は行う（onChanged で OFF→ON 切替に追従できるように）。
       // stream-detector の polling は enabled に関わらず安全（取得した
       // streamerChannelId は recordAggregate が enabled チェックで gating）。
-      initStreamDetector(sessionTracker);
+      // P5-B3: 配信切替時に字幕バッファをリセット（同じフックに相乗り）。
+      initStreamDetector(sessionTracker, () => captionProvider?.reset?.());
       initAggregator(settings, sessionTracker);
       // Phase 3.5 B5: DOM overlay 起動。CSS 即注入 + body 属性で表示モード反映。
       // 設定 onChanged の subscriber を内部で立てるので、enabled / displayStyle /
