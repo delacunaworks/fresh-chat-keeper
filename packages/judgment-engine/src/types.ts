@@ -62,12 +62,29 @@ export interface Message {
  *
  * - `game`: プレイ中のゲーム情報。未指定時はジャンルテンプレートのみで判定
  * - `settings`: ユーザーのフィルタ設定（v2形式）
+ * - `recentAudio` / `streamSummary`: Phase 5（v0.6.0）字幕連動。両 optional を
+ *   MVP で切っておくことで、後段 rolling summary でシグネチャを変えずに済む。
+ *   prompt-builder は両方を「あれば 1 行足す」出力分岐で握る（P5-B4b）。
  */
 export interface JudgmentContext {
   /** ゲーム進行コンテキスト */
   game?: GameContext;
   /** ユーザー設定（v2スキーマ） */
   settings: FilterSettings;
+  /**
+   * Phase 5 字幕連動（caption MVP）: 直近 N 秒の生発話。ステートレス。
+   * `text` は字幕連結、`qualityScore` は `evaluateCaptionQuality` 由来 0..1。
+   * 字幕 OFF / 品質低 / 機能 OFF のときは undefined（呼び出し側が素通し）。
+   * MVP で chrome-ext → proxy の `JudgeRequest.context` に乗せる唯一の追加経路。
+   */
+  recentAudio?: { text: string; qualityScore: number };
+  /**
+   * Phase 5 後段（拡張1: rolling summary）用。stream-level の累積文脈。
+   * **MVP では常に undefined**。後段で proxy が Durable Objects から自分で引く
+   * 別経路（captions ingest）で埋める。MVP の API 契約は recentAudio のみに限定し、
+   * 後段で chrome-ext の送信ロジックを触らずに済むよう、型だけ今切っておく。
+   */
+  streamSummary?: { text: string };
 }
 
 /**

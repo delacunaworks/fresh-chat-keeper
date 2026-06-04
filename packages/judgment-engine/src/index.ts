@@ -79,3 +79,7 @@ export { Stage2Batcher } from './stage2/batcher.js';
 // Phase 3.5（v0.5.0）視聴者フラグ機能の純粋層。
 // 永続化・DOM 介入は chrome-ext 側（B3 以降）が担当。
 export * from './user-stats/index.js';
+
+// Phase 5（v0.6.0）字幕連動（caption MVP）の純粋層。
+// 字幕 DOM 抽出・provider 実装は chrome-ext 側（P5-B3 以降）が担当。
+export * from './context/index.js';
