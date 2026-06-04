@@ -50,6 +50,15 @@ export const SETTINGS_V2_BACKUP_KEY = 'fck_settings_v2_backup';
  */
 export const SETTINGS_V3_BACKUP_KEY = 'fck_settings_v3_backup';
 
+/**
+ * v4 → v5 マイグレーション時のバックアップキー（Phase 5 / v0.6.0 新規）。
+ *
+ * v0.5.0 の version: 4 設定（userFlagging 含む）を保持したまま v5
+ * （captionContext 追加）に書き換える際の退避先。chrome-ext 内部の `Settings`
+ * 型だけが v5 に進む軽量移行（phase-5-audio-context.md 訂正2）。
+ */
+export const SETTINGS_V4_BACKUP_KEY = 'fck_settings_v4_backup';
+
 /** v3 のデフォルト値（不正入力時のフォールバック） */
 function getDefaultSettings(): FilterSettings {
   return {

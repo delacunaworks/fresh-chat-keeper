@@ -272,9 +272,12 @@ function installFakeChrome(seed: Record<string, unknown>): FakeStorage {
 }
 
 function storedSettings(uf: Partial<Settings['userFlagging']>): unknown {
+  // 現行スキーマ世代（v5）で seed する。旧 version だと loadSettings が
+  // マイグレーション書き込みを起こし、「set 呼ばれない」系アサーションが壊れる
+  // （P5-B4b で CURRENT_SETTINGS_VERSION が 4→5 に上がったため）。
   return {
     ...DEFAULT_SETTINGS,
-    version: 4,
+    version: 5,
     userFlagging: { ...DEFAULT_SETTINGS.userFlagging, ...uf },
   };
 }
