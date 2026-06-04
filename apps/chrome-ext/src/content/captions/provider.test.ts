@@ -104,6 +104,40 @@ describe('YouTubeCaptionProvider', () => {
     expect(await p.getRecentContext(60, 1.1)).toBeNull();
   });
 
+  it('UI 文字列（自動生成/クリックして設定）は ingest しない（P5-B5 hotfix）', () => {
+    const p = provider('archive');
+    p.__test__.ingest('日本語 (自動生成) をクリックして設定', 100, Date.now());
+    p.__test__.ingest('字幕を選択', 101, Date.now());
+    expect(p.__test__.segmentCount()).toBe(0);
+  });
+
+  it('効果音注釈 [叫び声] 等は sanitize で除去してから積む（P5-B5 hotfix）', async () => {
+    const p = provider('archive');
+    doc.video.currentTime = 120;
+    p.__test__.ingest('[叫び声] よし来た、次の部屋に進もう [笑い]', 100, Date.now());
+    p.__test__.ingest('ここのボスは強かったけど倒せた [荒い息]', 110, Date.now());
+    const ctx = await p.getRecentContext(60);
+    expect(ctx).not.toBeNull();
+    expect(ctx!.text).not.toContain('[');
+    expect(ctx!.text).not.toContain('叫び声');
+    expect(ctx!.text).not.toContain('荒い息');
+    expect(ctx!.text).toContain('次の部屋');
+    expect(ctx!.text).toContain('倒せた');
+  });
+
+  it('getRecentContext: ローリング字幕の周期重複を畳む（A B A B → A B）（P5-B5 hotfix）', async () => {
+    const p = provider('archive');
+    doc.video.currentTime = 120;
+    // 各 segment は distinct（ingest の lastText 重複スキップを回避）だが、
+    // 連結すると A。B。A。B。 の周期になる → dedupeRepeatedPhrases で 1 周期へ。
+    p.__test__.ingest('これから次のエリアに進むよ。', 100, Date.now());
+    p.__test__.ingest('ここのボス強いけど頑張る。これから次のエリアに進むよ。', 105, Date.now());
+    p.__test__.ingest('ここのボス強いけど頑張る。', 110, Date.now());
+    const ctx = await p.getRecentContext(60);
+    expect(ctx).not.toBeNull();
+    expect(ctx!.text).toBe('これから次のエリアに進むよ。ここのボス強いけど頑張る。');
+  });
+
   it('useable=false（短すぎ）→ null を返す', async () => {
     const p = provider('archive');
     doc.video.currentTime = 105;

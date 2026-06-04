@@ -7,3 +7,4 @@
 export * from './types.js';
 export * from './quality-evaluator.js';
 export * from './cache-signature.js';
+export * from './sanitize.js';

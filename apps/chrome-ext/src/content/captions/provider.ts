@@ -21,6 +21,8 @@
 
 import {
   evaluateCaptionQuality,
+  sanitizeCaptionText,
+  dedupeRepeatedPhrases,
   type AudioContextProvider,
   type CaptionSegment,
   type RecentAudioContext,
@@ -32,8 +34,32 @@ const CAPTION_CONTAINER_SELECTORS = [
   '.caption-window',
 ] as const;
 
-/** 字幕テキスト要素のセレクタ（コンテナ内）。 */
-const CAPTION_TEXT_SELECTORS = '.captions-text, .caption-visual-line, .caption-window';
+/**
+ * 字幕**テキスト**要素のセレクタ（行レベルのみ）。
+ *
+ * P5-B5 hotfix: 以前は `.caption-window`（= コンテナ相当）を含めていたため、
+ * その textContent に YouTube の設定メニュー文字列（「日本語 (自動生成) を
+ * クリックして設定」等）が混入していた。行レベルの実テキスト要素だけに限定し、
+ * マッチしなければ「字幕なし（空文字）」とする（コンテナ全体の UI 文字列を拾わない）。
+ * `.ytp-caption-segment` は YouTube の標準的な字幕行クラス。
+ */
+const CAPTION_TEXT_SELECTORS = '.ytp-caption-segment, .captions-text, .caption-visual-line';
+
+/**
+ * YouTube 字幕 UI 文字列の denylist（断片に含まれたら ingest しない防御）。
+ * 源は CAPTION_TEXT_SELECTORS の行レベル限定で断っているが、念のための二重防御。
+ * YouTube 固有なので judgment-engine（純粋層）ではなく provider に置く。
+ */
+const YT_CAPTION_UI_MARKERS = [
+  '自動生成',
+  'クリックして設定',
+  '字幕を選択',
+] as const;
+
+/** 断片が YouTube の字幕 UI 文字列を含むか（含めば発話ではないので捨てる）。 */
+function containsCaptionUiString(text: string): boolean {
+  return YT_CAPTION_UI_MARKERS.some((m) => text.includes(m));
+}
 
 /** リングバッファの保持上限。 */
 const MAX_SEGMENT_AGE_MS = 5 * 60 * 1000; // 5 分
@@ -159,7 +185,8 @@ export class YouTubeCaptionProvider implements AudioContextProvider {
       result = null;
     } else {
       result = {
-        text: recent.map((s) => s.text).join(' ').trim(),
+        // P5-B5 hotfix: 連結後にローリング字幕由来の重複文を畳む。
+        text: dedupeRepeatedPhrases(recent.map((s) => s.text).join(' ').trim()),
         qualityScore: quality.overallScore,
         source: 'caption',
         segmentCount: recent.length,
@@ -185,20 +212,27 @@ export class YouTubeCaptionProvider implements AudioContextProvider {
     } catch {
       return;
     }
-    const currentText = textEl?.textContent?.trim() ?? '';
-    if (!currentText || currentText === this.lastText) return;
+    const currentText = textEl?.textContent ?? '';
+    if (!currentText.trim()) return;
+    // 重複/sanitize/denylist の最終判定は ingestCaption に一元化する。
     this.ingestCaption(currentText, this.readVideoTime(), Date.now());
   }
 
   /**
-   * 1 字幕テキストをバッファに取り込む（重複/空はスキップ、prune 込み）。
-   * テスト用に分離（observer を立てずに収集ロジックを検証できる）。
+   * 1 字幕テキストをバッファに取り込む（UI 文字列除外 + sanitize + 重複/空スキップ、
+   * prune 込み）。テスト用に分離（observer を立てずに収集ロジックを検証できる）。
+   *
+   * P5-B5 hotfix:
+   * - YouTube UI 文字列（{@link containsCaptionUiString}）を含む断片は捨てる
+   * - {@link sanitizeCaptionText} で効果音注釈 `[..]`・連続空白を除去してから積む
+   * - 連続重複（sanitize 後の本文一致）はスキップ
    */
   private ingestCaption(text: string, currentTime: number, receivedAt: number): void {
-    const trimmed = text.trim();
-    if (!trimmed || trimmed === this.lastText) return;
-    this.lastText = trimmed;
-    this.segments.push({ text: trimmed, timestamp: currentTime, receivedAt });
+    if (containsCaptionUiString(text)) return;
+    const cleaned = sanitizeCaptionText(text);
+    if (!cleaned || cleaned === this.lastText) return;
+    this.lastText = cleaned;
+    this.segments.push({ text: cleaned, timestamp: currentTime, receivedAt });
     this.pruneOldSegments(receivedAt);
     // 新規字幕が入ったらメモを無効化（次回 getRecentContext で再構築）
     this.memo = null;
