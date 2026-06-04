@@ -171,7 +171,10 @@ export interface Settings {
 
 export const DEFAULT_SETTINGS: Settings = {
   enabled: true,
-  gameId: 'ace-attorney-1',
+  // 既定は「ゲームを選択しない」。以前はテスト用 placeholder の 'ace-attorney-1' が
+  // 既定のまま出荷されており、新規ユーザーに無関係なゲームが選択済みに見えていた
+  // （CLAUDE.md 既知問題）。'none' なら popup の「ゲームを選択しない」が初期選択になる。
+  gameId: 'none',
   progressByGame: {},
   filterMode: 'standard',
   displayMode: 'placeholder',
