@@ -25,3 +25,5 @@ dev-docs/
 
 # Claude Code ローカル領域（worktree, ローカル設定）
 .claude/
+# W-Spike throwaway prototype (Whisper audio spike, not part of the build)
+spikes/
