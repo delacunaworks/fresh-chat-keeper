@@ -44,7 +44,13 @@ import {
 
 export interface Env {
   ANTHROPIC_API_KEY: string;
-  RATE_LIMIT_KV: KVNamespace;
+  /**
+   * Cloudflare ネイティブ Rate Limiting binding（DOS 防御用）。
+   * 旧 RATE_LIMIT_KV（KV カウンタ）を置換。KV write 無料枠（1,000/日）を
+   * 食わず「1 判定 = 1 write」問題を解消する。設定は wrangler.toml の
+   * `[[ratelimits]]`（limit=30 / period=60s）。
+   */
+  JUDGE_RATE_LIMITER: RateLimit;
 }
 
 // ─── 型定義 ──────────────────────────────────────────────────────────────────
@@ -109,9 +115,11 @@ interface NormalizedRequest {
 }
 
 // ─── レート制限設定 ───────────────────────────────────────────────────────────
-
-const RATE_LIMIT_MAX = 30;
-const RATE_LIMIT_WINDOW_SECONDS = 60;
+//
+// 上限値（30 req/min）はコードではなく wrangler.toml の `[[ratelimits]]`
+// （simple.limit=30 / simple.period=60）で宣言する。ネイティブ Rate Limiting
+// binding に移行したため、KV カウンタ実装（旧 RATE_LIMIT_MAX /
+// RATE_LIMIT_WINDOW_SECONDS）は不要になった。
 
 /**
  * 1リクエストあたりの最大メッセージ数。
@@ -157,7 +165,7 @@ async function handleJudge(request: Request, env: Env): Promise<Response> {
 
   // レート制限
   const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
-  const allowed = await checkRateLimit(ip, env.RATE_LIMIT_KV);
+  const allowed = await checkRateLimit(ip, env.JUDGE_RATE_LIMITER);
   if (!allowed) {
     return jsonError('Rate limit exceeded. Max 30 requests per minute.', 429);
   }
@@ -511,26 +519,16 @@ async function judgeBatch(
 
 // ─── ヘルパー ─────────────────────────────────────────────────────────────────
 
-async function checkRateLimit(ip: string, kv: KVNamespace): Promise<boolean> {
+async function checkRateLimit(ip: string, limiter: RateLimit): Promise<boolean> {
   try {
-    const windowKey = Math.floor(Date.now() / (RATE_LIMIT_WINDOW_SECONDS * 1000));
-    const key = `rl:${ip}:${windowKey}`;
-
-    const current = await kv.get(key);
-    const count = current !== null ? parseInt(current, 10) : 0;
-
-    if (count >= RATE_LIMIT_MAX) {
-      return false;
-    }
-
-    await kv.put(key, String(count + 1), { expirationTtl: RATE_LIMIT_WINDOW_SECONDS * 2 });
-    return true;
+    const { success } = await limiter.limit({ key: ip });
+    return success;
   } catch (err) {
-    // KV 障害時は fail-open（リクエストを通す）。MVP 段階ではユーザーがフィルタを
-    // 失う可逸の方が、レート制限がたまに無効化されることよりも痛い。warn ログで
-    // 障害の発生を可視化し、頻発するなら別途対応を検討する。
+    // binding 障害時は fail-open（リクエストを通す）。MVP 段階ではユーザーがフィルタを
+    // 失う方が、レート制限がたまに無効化されることよりも痛い。warn ログで
+    // 障害の発生を可視化し、頻発するなら別途対応を検討する（HARD-01 を踏襲）。
     console.warn(
-      `[FreshChatKeeper] KV rate limit error (failing open): ${err instanceof Error ? err.message : String(err)}`,
+      `[FreshChatKeeper] rate limit binding error (failing open): ${err instanceof Error ? err.message : String(err)}`,
     );
     return true;
   }

@@ -40,21 +40,14 @@ describe('worker default export', () => {
 });
 
 describe('handleJudge: バリデーション', () => {
-  // インメモリ KV モック（rate-limit 用、最低限のメソッドのみ実装）
-  function createMockKV(): unknown {
-    const store = new Map<string, string>();
-    return {
-      async get(key: string) {
-        return store.get(key) ?? null;
-      },
-      async put(key: string, value: string) {
-        store.set(key, value);
-      },
-    };
+  // ネイティブ Rate Limiting binding の最小モック（常に通す）。
+  // 本物の `RateLimit` は `.limit({ key })` → `{ success }` を返す。
+  function createMockRateLimiter(): unknown {
+    return { async limit() { return { success: true }; } };
   }
 
   function buildEnv() {
-    return { ANTHROPIC_API_KEY: 'test-key', RATE_LIMIT_KV: createMockKV() };
+    return { ANTHROPIC_API_KEY: 'test-key', JUDGE_RATE_LIMITER: createMockRateLimiter() };
   }
 
   function buildRequest(body: unknown, token = 'test-uuid') {
@@ -457,17 +450,18 @@ describe('normalizeRequest', () => {
   });
 });
 
-describe('checkRateLimit (HARD-01: KV 障害時 fail-open)', () => {
-  function createMockKV(overrides?: Partial<{ get: () => Promise<string | null>; put: () => Promise<void> }>): unknown {
-    const store = new Map<string, string>();
+describe('checkRateLimit (HARD-01: Rate Limiting binding 障害時 fail-open)', () => {
+  /**
+   * ネイティブ `RateLimit` binding のモック。`limit()` の戻り値 `{ success }` を
+   * 差し替えるか、例外を投げさせる。
+   */
+  function createMockRateLimiter(
+    behavior: { success: boolean } | { throws: Error },
+  ): unknown {
     return {
-      async get(key: string) {
-        if (overrides?.get) return overrides.get();
-        return store.get(key) ?? null;
-      },
-      async put(key: string, value: string) {
-        if (overrides?.put) return overrides.put();
-        store.set(key, value);
+      async limit() {
+        if ('throws' in behavior) throw behavior.throws;
+        return { success: behavior.success };
       },
     };
   }
@@ -480,46 +474,27 @@ describe('checkRateLimit (HARD-01: KV 障害時 fail-open)', () => {
     warnSpy.mockRestore();
   });
 
-  it('正常系: KV から count を取得して制限内なら true', async () => {
+  it('正常系: limit() が success:true を返せば true', async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result = await checkRateLimit('1.2.3.4', createMockKV() as any);
+    const result = await checkRateLimit('1.2.3.4', createMockRateLimiter({ success: true }) as any);
     expect(result).toBe(true);
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
-  it('上限超過時は false', async () => {
-    const kv = createMockKV({
-      get: async () => '99', // RATE_LIMIT_MAX (30) を超えた値
-    });
+  it('上限超過時（success:false）は false', async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result = await checkRateLimit('1.2.3.4', kv as any);
+    const result = await checkRateLimit('1.2.3.4', createMockRateLimiter({ success: false }) as any);
     expect(result).toBe(false);
   });
 
-  it('KV.get が throw しても fail-open で true を返し、warn ログを出す', async () => {
-    const kv = createMockKV({
-      get: async () => {
-        throw new Error('KV connection failed');
-      },
-    });
+  it('limit() が throw しても fail-open で true を返し、warn ログを出す', async () => {
+    const limiter = createMockRateLimiter({ throws: new Error('rate limit binding down') });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result = await checkRateLimit('1.2.3.4', kv as any);
+    const result = await checkRateLimit('1.2.3.4', limiter as any);
     expect(result).toBe(true);
     expect(warnSpy).toHaveBeenCalledOnce();
     expect(warnSpy.mock.calls[0]?.[0]).toContain('failing open');
-    expect(warnSpy.mock.calls[0]?.[0]).toContain('KV connection failed');
-  });
-
-  it('KV.put が throw しても fail-open で true を返す', async () => {
-    const kv = createMockKV({
-      put: async () => {
-        throw new Error('KV write failed');
-      },
-    });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result = await checkRateLimit('1.2.3.4', kv as any);
-    expect(result).toBe(true);
-    expect(warnSpy).toHaveBeenCalledOnce();
+    expect(warnSpy.mock.calls[0]?.[0]).toContain('rate limit binding down');
   });
 });
 
