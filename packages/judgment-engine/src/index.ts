@@ -52,6 +52,17 @@ export {
 export type { ModelTier, ModelConfig } from './stage2/model-router.js';
 export { selectModel, getEffectiveModel } from './stage2/model-router.js';
 
+// Phase 7（P7-B2）: サーバ側 LLM 呼び出し抽象。proxy / apps/api → LLM の継ぎ目。
+// （Stage2Transport = chrome-ext → proxy の往復抽象とは別レイヤー）
+export type {
+  LLMProvider,
+  LLMRequest,
+  LLMResponse,
+  LLMMessage,
+  AnthropicProviderOptions,
+} from './llm/provider.js';
+export { AnthropicProvider } from './llm/provider.js';
+
 export type {
   CacheStorage,
   CacheEntry,

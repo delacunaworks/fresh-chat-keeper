@@ -32,6 +32,8 @@ import {
   buildSystemPrompt,
   buildUserPrompt,
   getEffectiveModel,
+  AnthropicProvider,
+  type LLMRequest,
   type ModelTier,
   type Message as JudgmentMessage,
   type JudgmentContext,
@@ -377,29 +379,6 @@ function buildGenreTemplateField(selectedIds: string[]): string | undefined {
 
 // ─── バッチ LLM 判定 ───────────────────────────────────────────────────────────
 
-/** Anthropic を 1 回呼び、本文テキストを返す。失敗時は null（呼び出し側で fallback）。 */
-async function callAnthropicOnce(
-  body: string,
-  apiKey: string,
-): Promise<string | null> {
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body,
-  });
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error(`[FreshChatKeeper] Anthropic API error ${response.status}: ${errorText}`);
-    return null;
-  }
-  const data = (await response.json()) as { content: Array<{ type: string; text: string }> };
-  return data.content[0]?.text ?? '';
-}
-
 async function judgeBatch(
   req: NormalizedRequest,
   apiKey: string,
@@ -437,17 +416,21 @@ async function judgeBatch(
     degraded: true,
   });
 
-  const requestBody = JSON.stringify({
+  // P7-B2: Anthropic 直叩きを LLMProvider 抽象経由に置換（挙動不変）。
+  // 送出 HTTP リクエスト・null/throw 分岐は旧 callAnthropicOnce と等価。
+  const provider = new AnthropicProvider({ apiKey });
+  const llmRequest: LLMRequest = {
     model: modelCfg.model,
-    max_tokens: maxTokens,
+    maxTokens,
     temperature: modelCfg.temperature,
     system: systemBlocks,
     messages: [{ role: 'user', content: userPrompt }],
-  });
+  };
 
   try {
-    let text = await callAnthropicOnce(requestBody, apiKey);
-    if (text === null) return fallbackResults();
+    const initial = await provider.complete(llmRequest);
+    if (initial === null) return fallbackResults();
+    let text = initial.text;
 
     const messageIds = req.messages.map((m) => m.id);
     let detail = parseMultiLabelResponseDetailed(text, messageIds);
@@ -461,9 +444,9 @@ async function judgeBatch(
           cls.error ? `: ${cls.error instanceof Error ? cls.error.message : String(cls.error)}` : ''
         }; retrying once`,
       );
-      const retryText = await callAnthropicOnce(requestBody, apiKey);
-      if (retryText !== null) {
-        text = retryText;
+      const retry = await provider.complete(llmRequest);
+      if (retry !== null) {
+        text = retry.text;
         detail = parseMultiLabelResponseDetailed(text, messageIds);
       }
       if (detail.degraded) {
