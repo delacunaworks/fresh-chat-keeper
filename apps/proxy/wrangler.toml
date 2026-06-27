@@ -5,7 +5,11 @@ compatibility_date = "2024-07-25"
 # ANTHROPIC_API_KEY は wrangler secret で設定する（本番環境）
 # ローカル開発時は .dev.vars ファイルに記述する（.gitignore 済み）
 
-[[kv_namespaces]]
-binding = "RATE_LIMIT_KV"
-# 本番 deploy 前に `wrangler kv namespace create RATE_LIMIT_KV` で取得した ID を設定する
-id = "a8c3d4a066474f16a089afdb8ff719c8"
+# レート制限: Cloudflare ネイティブ Rate Limiting binding（DOS 防御）。
+# 旧 [[kv_namespaces]] RATE_LIMIT_KV を置換し、KV write 無料枠（1,000/日）を消費しない。
+# namespace_id はアカウント内で一意な正の整数（文字列）。proxy=1001 を割当（事前 CLI 作成不要）。
+# simple.period は 10 または 60 のみ許容。現状の 60 秒窓に合わせて 60、limit=30 req/min。
+[[ratelimits]]
+name = "JUDGE_RATE_LIMITER"
+namespace_id = "1001"
+simple = { limit = 30, period = 60 }
