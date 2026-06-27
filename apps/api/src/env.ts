@@ -29,6 +29,16 @@ export interface Env {
    */
   COLLECTION_SALT: string;
 
+  /**
+   * ElevenLabs Scribe v2（ASR / 文字起こし）の API キー（Phase 7 / P7-B1）。
+   * `apps/api/src/lib/scribe.ts` の `transcribe()` に渡す。
+   * `wrangler secret put ELEVENLABS_API_KEY` で本番に設定し、
+   * ローカル開発時は `.dev.vars` に書く（値はリポにコミットしない）。
+   *
+   * 実際の ASR 呼び出し配線（Durable Object / endpoint）は P7-B3 で行う。
+   */
+  ELEVENLABS_API_KEY: string;
+
   // ─── 公開 vars ────────────────────────────────────────
   /**
    * CORS 許可 origin のカンマ区切りリスト。
