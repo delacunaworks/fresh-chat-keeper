@@ -38,6 +38,7 @@
     "@fresh-chat-keeper/shared": "workspace:*"
   },
   "devDependencies": {
+    "@types/node": "^26.0.1",
     "typescript": "^5.5.0",
     "vitest": "^2.0.0"
   }
