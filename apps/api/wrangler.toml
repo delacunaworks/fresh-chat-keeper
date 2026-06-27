@@ -47,6 +47,18 @@ id = "3cb19ee1fcb34b83a296009474895862"  # ⚠ DEPLOY-01: 本番 ID に差し替
 binding = "CONSENT_KV"
 id = "30f59e56c01c473aab81dd2d08f5faf4"  # ⚠ DEPLOY-01: 本番 ID に差し替え
 
+# ─── Durable Objects（Phase 7 / P7-B3）─────────────────────────────
+# 配信(video_id)単位の音声文脈 DO。SQLite-backed（new_sqlite_classes）なので
+# Workers 無料枠で動作する（KV-backed の new_classes は有料）。
+[[durable_objects.bindings]]
+name = "STREAM_CONTEXT_DO"
+class_name = "StreamContextDO"
+
+# DO の SQLite ストレージを有効化する migration（D1 の SQL migration とは別系統）。
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["StreamContextDO"]
+
 # CORS 許可 origin のカンマ区切りリスト。
 # BACKGROUND-01 後は chrome-extension origin のみで動作する設計。
 # Chrome Web Store 公開後の extension ID を本番デプロイ時に置き換える:

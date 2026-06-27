@@ -20,6 +20,15 @@ export interface Env {
   /** 現在有効な consentVersion（クライアントの送信値と照合） */
   CONSENT_KV: KVNamespace;
 
+  // ─── Durable Objects ──────────────────────────────
+  /**
+   * 配信(video_id)単位の音声文脈 DO（Phase 7 / P7-B3）。
+   * `idFromName(videoId)` で singleton にルーティングし、文字起こし segment の
+   * 蓄積・要約（P7-B4）を行う。SQLite-backed（Workers 無料枠で動作）。
+   * クラス実体は src/stream-context/stream-context-do.ts、宣言は wrangler.toml。
+   */
+  STREAM_CONTEXT_DO: DurableObjectNamespace;
+
   // ─── シークレット ─────────────────────────────
   /**
    * authorChannelId 等のハッシュ化に使う共通 salt。

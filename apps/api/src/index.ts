@@ -23,7 +23,12 @@ import { corsMiddleware } from './middleware/cors.js';
 import { ingestRouter } from './routes/ingest.js';
 import { revokeRouter } from './routes/revoke.js';
 import { consentRouter } from './routes/consent.js';
+import { streamContextRouter } from './routes/stream-context.js';
 import { runRetention } from './db/retention.js';
+
+// Durable Object クラスは Worker entry の named export として公開する必要がある
+// （wrangler.toml の class_name と一致させる）。
+export { StreamContextDO } from './stream-context/stream-context-do.js';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -42,6 +47,7 @@ app.get('/', (c) =>
 app.route('/v1', ingestRouter);
 app.route('/v1', revokeRouter);
 app.route('/v1', consentRouter);
+app.route('/v1', streamContextRouter);
 
 /**
  * Cloudflare Workers の cron trigger ハンドラ。wrangler.toml の
