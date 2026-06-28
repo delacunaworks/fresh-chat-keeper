@@ -252,31 +252,36 @@ function buildDynamicContextBlock(context: JudgmentContext): string {
 // ─── 内部実装: Block 3（字幕連動、cache_control なし）─────────────────────────
 
 /**
- * Block 3: 字幕連動（Phase 5 / P5-B4c）の動的文脈。
+ * Block 3: 音声文脈（Phase 5 字幕連動 → Phase 7 rolling summary）の動的文脈。
  *
- * - `streamSummary?.text`（後段 rolling summary。**MVP では常に undefined**）→
- *   「## 配信の累積文脈」セクション
- * - `recentAudio?.text`（MVP の字幕直近発話）→「## 配信者の直近の発言」セクション
+ * 3 層ウィンドウ（doc §3）を L2→L1→L0 の順で「あれば 1 セクション」出力する:
+ * - `streamSummary?.whole`（L2 全体累積要約。proxy が DO から引く）→「配信の累積文脈」
+ * - `streamSummary?.recent`（L1 近傍要約。同上）→「配信の近況」
+ * - `recentAudio?.text`（L0 逐語。DO の verbatim or Phase 5 字幕直近発話）→「直近の発言」
  *
- * どちらも無ければ空文字列を返し、呼び出し側は Block3 自体を出力しない
- * （= captionContext.enabled=false の大多数では従来と完全に同一のプロンプト）。
+ * いずれも無ければ空文字列を返し、呼び出し側は Block3 自体を出力しない
+ * （= 音声文脈 OFF / DO 未投入の大多数では従来と完全に同一のプロンプト）。
  *
- * **この出力は `cache_control` を付けないブロックに置かれる前提**（字幕は秒で
- * 変わるため。{@link buildSystemPrompt} 参照）。
+ * **この出力は `cache_control` を付けないブロックに置かれる前提**（音声文脈は
+ * 頻繁に変わるため。{@link buildSystemPrompt} 参照）。
  */
 function buildAudioContextBlock(context: JudgmentContext): string {
-  const summaryText = context.streamSummary?.text?.trim();
-  const recentText = context.recentAudio?.text?.trim();
-  if (!summaryText && !recentText) return '';
+  const whole = context.streamSummary?.whole?.trim();
+  const recent = context.streamSummary?.recent?.trim();
+  const verbatim = context.recentAudio?.text?.trim();
+  if (!whole && !recent && !verbatim) return '';
 
   const sections: string[] = [];
-  if (summaryText) {
-    sections.push(`## 配信の累積文脈（これまでの配信内容の要約）\n${summaryText}`);
+  if (whole) {
+    sections.push(`## 配信の累積文脈（配信全体のこれまでの要約）\n${whole}`);
   }
-  if (recentText) {
+  if (recent) {
+    sections.push(`## 配信の近況（直近数分の要約）\n${recent}`);
+  }
+  if (verbatim) {
     sections.push(
       '## 配信者の直近の発言（直近の音声/字幕）\n' +
-        `配信者は直近で次のように発言しています:\n"${recentText}"\n` +
+        `配信者は直近で次のように発言しています:\n"${verbatim}"\n` +
         'この発言からゲームの進行状況・現在のアクションを推測し、ネタバレ判定に活用してください。',
     );
   }

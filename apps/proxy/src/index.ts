@@ -53,6 +53,13 @@ export interface Env {
    * `[[ratelimits]]`（limit=30 / period=60s）。
    */
   JUDGE_RATE_LIMITER: RateLimit;
+  /**
+   * apps/api（fresh-chat-keeper-api）への Service Binding（Phase 7 / P7-B5）。
+   * StreamContextDO の rolling summary を `GET /v1/stream-context/summary?videoId=`
+   * で引くために使う。wrangler.toml の `[[services]] binding="API"` で宣言。
+   * テスト・ローカルで未設定のことがあるため optional（無ければ音声文脈なしで判定継続）。
+   */
+  API?: Fetcher;
 }
 
 // ─── 型定義 ──────────────────────────────────────────────────────────────────
@@ -100,6 +107,12 @@ interface NewJudgeRequest {
      * 通し、buildSystemPrompt が Block3（cache_control なし）に乗せる。
      */
     recentAudio?: { text: string; qualityScore: number };
+    /**
+     * Phase 7（P7-B5）: 配信の video_id。proxy がこれをキーに Service Binding 経由で
+     * StreamContextDO の rolling summary を引く。未指定なら従来どおり（request 同梱
+     * の recentAudio のみ）。
+     */
+    videoId?: string;
   };
   tier?: ModelTier;
 }
@@ -109,6 +122,8 @@ interface NormalizedRequest {
   messages: Array<{ id: string; text: string }>;
   context: JudgmentContext;
   tier: ModelTier;
+  /** Phase 7（P7-B5）: 音声文脈を DO から引くための video_id（新形式のみ・任意）。 */
+  videoId?: string;
   /**
    * verdict 計算（lenient/standard/strict ベース）に使う旧 FilterMode 値。
    * judgment-engine の `categories.spoiler.strength` と互換。
@@ -214,10 +229,79 @@ async function handleJudge(request: Request, env: Env): Promise<Response> {
   }
 
   const normalized = normalizeRequest(bodyObj);
+  // P7-B5: DO の rolling summary を Service Binding で引き、Block3 用 context に反映。
+  // 失敗・空は request 同梱 recentAudio へフォールバック（判定は止めない）。
+  await enrichWithStreamSummary(normalized, env);
   const { results, degraded } = await judgeBatch(normalized, env.ANTHROPIC_API_KEY);
 
   const response: JudgeResponse = { results, ...(degraded ? { degraded: true } : {}) };
   return jsonOk(response);
+}
+
+// ─── 音声文脈エンリッチ（P7-B5: DO rolling summary を Service Binding で引く）──────
+
+/** StreamContextDO の getRecentSummary 応答（whole/recent/verbatim）。 */
+interface StreamSummaryResponse {
+  whole?: unknown;
+  recent?: unknown;
+  verbatim?: unknown;
+}
+
+/**
+ * 新形式リクエストに video_id があれば、apps/api（Service Binding）から
+ * rolling summary を引いて `normalized.context` に反映する。
+ *
+ * 反映の優先順位:
+ * - DO 由来 whole/recent → `streamSummary.{whole,recent}`
+ * - DO 由来 verbatim → `recentAudio`（request 同梱より優先＝上書き）
+ * - DO が空 / videoId なし / binding なし / 取得失敗 → 何もしない
+ *   （= request 同梱の recentAudio が温存され、Phase 5 経路にフォールバック）
+ *
+ * 取得失敗（throw / 非 2xx / JSON パース失敗）は warn して判定を継続する
+ * （音声文脈なしでも判定は止めない）。
+ */
+async function enrichWithStreamSummary(
+  normalized: NormalizedRequest,
+  env: Env,
+): Promise<void> {
+  const videoId = normalized.videoId;
+  if (!videoId || !env.API) return; // videoId / binding なし → フォールバック
+
+  try {
+    const res = await env.API.fetch(
+      `https://fck-api/v1/stream-context/summary?videoId=${encodeURIComponent(videoId)}`,
+    );
+    if (!res.ok) {
+      console.warn(`[FreshChatKeeper] stream-context summary HTTP ${res.status}; using fallback`);
+      return;
+    }
+    const summary = (await res.json()) as StreamSummaryResponse;
+
+    const whole = typeof summary.whole === 'string' ? summary.whole.trim() : '';
+    const recent = typeof summary.recent === 'string' ? summary.recent.trim() : '';
+    const verbatim = typeof summary.verbatim === 'string' ? summary.verbatim.trim() : '';
+
+    // DO 由来 whole/recent があれば streamSummary に反映（空は載せない）。
+    if (whole || recent) {
+      normalized.context.streamSummary = {
+        ...(whole ? { whole } : {}),
+        ...(recent ? { recent } : {}),
+      };
+    }
+    // DO 由来 verbatim があれば recentAudio を上書き（DO 優先）。
+    // qualityScore はキャッシュシグネチャ用で proxy 側 prompt には影響しないが、
+    // DO 文字起こしは権威的なので 1 とする。
+    if (verbatim) {
+      normalized.context.recentAudio = { text: verbatim, qualityScore: 1 };
+    }
+    // whole/recent/verbatim いずれも無い（DO 空）→ 何もしない＝request 同梱を温存。
+  } catch (err) {
+    console.warn(
+      `[FreshChatKeeper] stream-context summary fetch failed (using fallback): ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+    );
+  }
 }
 
 // ─── リクエスト正規化（旧/新両形式対応）─────────────────────────────────────
@@ -275,6 +359,10 @@ function normalizeRequest(body: Record<string, unknown>): NormalizedRequest {
       },
       tier: newReq.tier ?? 'free',
       legacyFilterMode: strengthToLegacyMode(settings.categories.spoiler.strength),
+      // P7-B5: 音声文脈を DO から引くための video_id（あれば）。
+      ...(typeof newReq.context.videoId === 'string' && newReq.context.videoId.length > 0
+        ? { videoId: newReq.context.videoId }
+        : {}),
     };
   }
 
@@ -603,4 +691,5 @@ export const __test__ = {
   primaryToVerdict,
   checkRateLimit,
   isValidV2Settings,
+  enrichWithStreamSummary,
 };

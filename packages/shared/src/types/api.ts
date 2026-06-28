@@ -35,11 +35,16 @@ export interface JudgeRequest {
      * Phase 5（v0.6.0 / P5-B4c）字幕連動: 配信者の直近 N 秒の発話文脈。
      * `captionContext.enabled === true` のクライアントだけが送る（既定 OFF）。
      * proxy はこれを Stage 2 prompt の Block3（`cache_control` なし）に乗せる。
-     * **MVP の API 契約追加はこの 1 フィールドのみ**（`streamSummary` は送らない。
-     * 後段 rolling summary は proxy が別経路で引く。phase-5-audio-context.md
-     * §「API 契約の境界」）。
+     * P7-B5 以降は DO 由来の音声文脈（verbatim）が取得できればそちらを優先し、
+     * これは DO 未投入/取得失敗時のフォールバック源として残る。
      */
     recentAudio?: { text: string; qualityScore: number };
+    /**
+     * Phase 7（P7-B5）: 配信の video_id。proxy がこれをキーに Service Binding 経由で
+     * StreamContextDO の rolling summary（whole/recent/verbatim）を引き、Block3 に
+     * 載せる。未指定なら従来どおり request 同梱の recentAudio のみで判定する。
+     */
+    videoId?: string;
   };
   /**
    * ユーザーティア。Phase 2 では optional（未指定時は 'free' 扱い）。

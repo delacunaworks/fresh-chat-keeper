@@ -328,10 +328,10 @@ describe('buildSystemPrompt: Block 3 (audio context)', () => {
     expect(blocks[2].cache_control).toBeUndefined();
   });
 
-  it('streamSummary あり → 累積文脈セクションが出る（MVP では通常 undefined だが分岐を保護）', () => {
+  it('streamSummary.whole あり → 累積文脈セクションが出る（P7-B5）', () => {
     const ctx: JudgmentContext = {
       ...buildContext({ game: { gameId: 'g', progressType: 'none' } }),
-      streamSummary: { text: 'これまでに第1章をクリアした' },
+      streamSummary: { whole: 'これまでに第1章をクリアした' },
     };
     const blocks = buildSystemPrompt(ctx, { supportsCaching: true });
     expect(blocks).toHaveLength(3);
@@ -339,16 +339,41 @@ describe('buildSystemPrompt: Block 3 (audio context)', () => {
     expect(blocks[2].text).toContain('これまでに第1章をクリアした');
   });
 
-  it('recentAudio + streamSummary 両方 → 1 つの Block3 に両セクション', () => {
+  it('streamSummary.recent あり → 近況セクションが出る（P7-B5）', () => {
     const ctx: JudgmentContext = {
       ...buildContext({ game: { gameId: 'g', progressType: 'none' } }),
-      recentAudio: { text: '直近の発言テキスト', qualityScore: 0.6 },
-      streamSummary: { text: '累積要約テキスト' },
+      streamSummary: { recent: '今は中ボスと戦っている' },
     };
     const blocks = buildSystemPrompt(ctx, { supportsCaching: true });
     expect(blocks).toHaveLength(3);
-    expect(blocks[2].text).toContain('累積要約テキスト');
-    expect(blocks[2].text).toContain('直近の発言テキスト');
+    expect(blocks[2].text).toContain('配信の近況');
+    expect(blocks[2].text).toContain('今は中ボスと戦っている');
+  });
+
+  it('whole→recent→verbatim の順で 1 つの Block3 に全セクション（doc §3 の順序）', () => {
+    const ctx: JudgmentContext = {
+      ...buildContext({ game: { gameId: 'g', progressType: 'none' } }),
+      recentAudio: { text: '直近の発言テキスト', qualityScore: 0.6 },
+      streamSummary: { whole: '累積要約テキスト', recent: '近傍要約テキスト' },
+    };
+    const blocks = buildSystemPrompt(ctx, { supportsCaching: true });
+    expect(blocks).toHaveLength(3);
+    const text = blocks[2].text;
+    expect(text).toContain('累積要約テキスト');
+    expect(text).toContain('近傍要約テキスト');
+    expect(text).toContain('直近の発言テキスト');
+    // L2(whole) → L1(recent) → L0(verbatim) の順
+    expect(text.indexOf('累積要約テキスト')).toBeLessThan(text.indexOf('近傍要約テキスト'));
+    expect(text.indexOf('近傍要約テキスト')).toBeLessThan(text.indexOf('直近の発言テキスト'));
+  });
+
+  it('streamSummary が空オブジェクト {} で recentAudio もなければ Block3 を出力しない', () => {
+    const ctx: JudgmentContext = {
+      ...buildContext({ game: { gameId: 'g', progressType: 'none' } }),
+      streamSummary: {},
+    };
+    const blocks = buildSystemPrompt(ctx, { supportsCaching: true });
+    expect(blocks).toHaveLength(2);
   });
 
   it('recentAudio.text が空白のみなら Block3 を出力しない', () => {

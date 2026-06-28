@@ -49,11 +49,12 @@ export async function sendStage2Batch(
   onResult: OnStage2Result,
   videoTitle?: string,
   recentAudio?: { text: string; qualityScore: number },
+  videoId?: string,
 ): Promise<boolean> {
   if (batch.length === 0) return true;
 
   const transport = createChromeTransport(settings.proxyUrl, token);
-  const payload = buildJudgeRequestPayload(batch, settings, videoTitle, recentAudio);
+  const payload = buildJudgeRequestPayload(batch, settings, videoTitle, recentAudio, videoId);
 
   let response;
   try {
@@ -148,6 +149,7 @@ function buildJudgeRequestPayload(
   settings: Settings,
   videoTitle: string | undefined,
   recentAudio: { text: string; qualityScore: number } | undefined,
+  videoId: string | undefined,
 ): JudgeRequestPayload {
   const context = buildJudgmentContext(settings, videoTitle);
   // B4a: shared JudgeRequest に context?/tier? を後方互換追加したので
@@ -161,6 +163,9 @@ function buildJudgeRequestPayload(
       // undefined（既定・字幕 OFF）なら context に乗らず、v0.5.0 と完全同一の
       // ペイロード。proxy はこれを Block3（cache_control なし）に乗せる。
       ...(recentAudio ? { recentAudio } : {}),
+      // P7-B5: video_id（あれば）。proxy がこれをキーに DO の rolling summary を
+      // Service Binding で引く。空文字は載せない。
+      ...(videoId ? { videoId } : {}),
     },
     tier: 'free',
   };

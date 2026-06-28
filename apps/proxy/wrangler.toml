@@ -13,3 +13,11 @@ compatibility_date = "2024-07-25"
 name = "JUDGE_RATE_LIMITER"
 namespace_id = "1001"
 simple = { limit = 30, period = 60 }
+
+# Service Binding（Phase 7 / P7-B5）: apps/api（fresh-chat-keeper-api）への内部呼び出し。
+# 判定時に StreamContextDO の rolling summary を
+# GET /v1/stream-context/summary?videoId= で引くために使う。
+# apps/api を先にデプロイしてから proxy をデプロイすること（binding 先が必要）。
+[[services]]
+binding = "API"
+service = "fresh-chat-keeper-api"

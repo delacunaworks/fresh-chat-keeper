@@ -954,6 +954,9 @@ async function drainStage2Queue(): Promise<void> {
       // captionContext.enabled=false（既定）では captionSnapshot.recentAudio は
       // undefined のまま → context に乗らず v0.5.0 と完全同一のペイロード。
       await refreshCaptionSnapshot();
+      // P7-B5: video_id を載せる（あれば）。proxy がこれをキーに DO の rolling
+      // summary を Service Binding で引く。取得不能（空文字）なら従来どおり。
+      const videoIdForJudge = getVideoIdFromUrl();
       const success = await sendStage2Batch(
         batch,
         currentSettings,
@@ -961,6 +964,7 @@ async function drainStage2Queue(): Promise<void> {
         applyStage2Verdict,
         currentVideoTitle,
         captionSnapshot.recentAudio,
+        videoIdForJudge || undefined,
       );
       if (success) await incrementStage2Usage(batch.length);
 
