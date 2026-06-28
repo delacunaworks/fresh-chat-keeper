@@ -10,3 +10,5 @@ export {
   ESTIMATED_LIVE_CAPTION_DELAY_SECONDS,
 } from './live-delay.js';
 export { createAudioContextProvider } from './factory.js';
+// Phase 7（P7-FEED）: DOM 字幕を StreamContextDO へ定期送信する feeder。
+export { CaptionFeeder, type CaptionFeederDeps } from './feeder.js';

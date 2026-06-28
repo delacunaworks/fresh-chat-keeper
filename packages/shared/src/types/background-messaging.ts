@@ -20,10 +20,14 @@
  */
 
 /**
- * apps/api の 3 エンドポイントを表す discriminated union のタグ。
- * background 側はこの値で URL パスを構築する: `${apiUrl}/v1/${endpoint}`
+ * apps/api のエンドポイントを表す discriminated union のタグ。
+ * background 側はこの値から URL パスを構築する（service-worker の ENDPOINT_PATHS）。
+ *
+ * - ingest / consent / revoke: Phase 2.5 データ収集（consent 必須）
+ * - stream-context/captions: Phase 7（P7-FEED）字幕 feeder。token-check のみ
+ *   （consent 不要・captionContext.enabled で gating）。
  */
-export type BgFetchEndpoint = 'ingest' | 'consent' | 'revoke';
+export type BgFetchEndpoint = 'ingest' | 'consent' | 'revoke' | 'stream-context/captions';
 
 /**
  * content-script / popup から background へ送る fetch 依頼のペイロード。

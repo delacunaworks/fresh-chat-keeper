@@ -83,9 +83,16 @@ const ENDPOINT_PATHS: Record<BgFetchEndpoint, string> = {
   ingest: '/v1/ingest',
   consent: '/v1/consent',
   revoke: '/v1/revoke',
+  // Phase 7（P7-FEED）字幕 feeder。token-check のみ（consent 不要）。
+  'stream-context/captions': '/v1/stream-context/captions',
 };
 
-const VALID_ENDPOINTS = new Set<BgFetchEndpoint>(['ingest', 'consent', 'revoke']);
+const VALID_ENDPOINTS = new Set<BgFetchEndpoint>([
+  'ingest',
+  'consent',
+  'revoke',
+  'stream-context/captions',
+]);
 
 /**
  * 文字列が apps/api の許可 origin かを判定する。
