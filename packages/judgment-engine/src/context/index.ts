@@ -8,3 +8,5 @@ export * from './types.js';
 export * from './quality-evaluator.js';
 export * from './cache-signature.js';
 export * from './sanitize.js';
+// Phase 7（P7-B4）: 音声文脈 rolling summary（L1/L2）の純粋プロンプトビルダー。
+export * from './summary-prompt.js';

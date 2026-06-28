@@ -48,6 +48,15 @@ export interface Env {
    */
   ELEVENLABS_API_KEY: string;
 
+  /**
+   * Anthropic（Claude）API キー（Phase 7 / P7-B4）。
+   * StreamContextDO の要約パイプライン（alarm 内の L1/L2 生成）が
+   * AnthropicProvider 経由で使う。判定経路の apps/proxy とは別 Worker なので
+   * apps/api 独自に保持する。
+   * `wrangler secret put ANTHROPIC_API_KEY` で設定し、ローカルは `.dev.vars`。
+   */
+  ANTHROPIC_API_KEY: string;
+
   // ─── 公開 vars ────────────────────────────────────────
   /**
    * CORS 許可 origin のカンマ区切りリスト。

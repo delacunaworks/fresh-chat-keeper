@@ -50,7 +50,7 @@ export {
 
 // Stage 2 building blocks（Phase 2 で実装、judgeMessage 等の統合は後続）
 export type { ModelTier, ModelConfig } from './stage2/model-router.js';
-export { selectModel, getEffectiveModel } from './stage2/model-router.js';
+export { selectModel, getEffectiveModel, getSummaryModel } from './stage2/model-router.js';
 
 // Phase 7（P7-B2）: サーバ側 LLM 呼び出し抽象。proxy / apps/api → LLM の継ぎ目。
 // （Stage2Transport = chrome-ext → proxy の往復抽象とは別レイヤー）
