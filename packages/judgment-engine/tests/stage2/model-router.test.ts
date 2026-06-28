@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   selectModel,
   getEffectiveModel,
+  getSummaryModel,
   type ModelTier,
 } from '../../src/stage2/model-router.js';
 
@@ -47,6 +48,21 @@ describe('model-router', () => {
       expect(getEffectiveModel('free').supportsCaching).toBe(true);
       expect(getEffectiveModel('premium').supportsCaching).toBe(true);
       expect(getEffectiveModel('streamer').supportsCaching).toBe(true);
+    });
+  });
+
+  describe('getSummaryModel (Phase 7: 要約は Sonnet・判定と分離)', () => {
+    it('判定（Haiku）とは別モデル（Sonnet 4.6）を返す', () => {
+      const summary = getSummaryModel();
+      expect(summary.model).toBe('claude-sonnet-4-6');
+      expect(summary.model).not.toBe(getEffectiveModel('free').model);
+    });
+
+    it('要約は temperature 0.2 / supportsCaching=false（判定キャッシュに影響させない）', () => {
+      const summary = getSummaryModel();
+      expect(summary.temperature).toBe(0.2);
+      expect(summary.supportsCaching).toBe(false);
+      expect(summary.maxTokens).toBeGreaterThanOrEqual(300);
     });
   });
 });

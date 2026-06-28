@@ -150,6 +150,33 @@ async function bgFetch(
   return res;
 }
 
+// ─── stream-context captions（P7-FEED）─────────────────────────
+
+/** POST /v1/stream-context/captions の 1 segment（DO の CaptionSegment 契約に整合）。 */
+export interface StreamCaptionSegment {
+  /** 文字起こし/字幕テキスト（漢字のまま）。 */
+  text: string;
+  /** 配信開始からの経過秒数（video.currentTime）。 */
+  t: number;
+}
+
+/**
+ * POST /v1/stream-context/captions — 字幕 feeder（P7-FEED）。
+ *
+ * video_id 単位の StreamContextDO に字幕 segment を蓄積させる。token-check のみ
+ * （consent 不要・captionContext.enabled で gating）。bg-fetch 経由で
+ * chrome-extension:// origin から発火する（BACKGROUND-01 と同経路）。
+ *
+ * 失敗は呼び出し側（CaptionFeeder）が best-effort で握る（リトライ嵐にしない）。
+ */
+export async function postStreamCaptions(
+  ctx: CollectionClientContext,
+  videoId: string,
+  segments: StreamCaptionSegment[],
+): Promise<BackgroundFetchResponse> {
+  return bgFetch('stream-context/captions', ctx, { videoId, segments });
+}
+
 // ─── consent / revoke（一発系 API）─────────────────────────────
 
 /**

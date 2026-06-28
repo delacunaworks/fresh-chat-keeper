@@ -20,6 +20,15 @@ export interface Env {
   /** 現在有効な consentVersion（クライアントの送信値と照合） */
   CONSENT_KV: KVNamespace;
 
+  // ─── Durable Objects ──────────────────────────────
+  /**
+   * 配信(video_id)単位の音声文脈 DO（Phase 7 / P7-B3）。
+   * `idFromName(videoId)` で singleton にルーティングし、文字起こし segment の
+   * 蓄積・要約（P7-B4）を行う。SQLite-backed（Workers 無料枠で動作）。
+   * クラス実体は src/stream-context/stream-context-do.ts、宣言は wrangler.toml。
+   */
+  STREAM_CONTEXT_DO: DurableObjectNamespace;
+
   // ─── シークレット ─────────────────────────────
   /**
    * authorChannelId 等のハッシュ化に使う共通 salt。
@@ -28,6 +37,25 @@ export interface Env {
    * ローカル開発時は `.dev.vars` に書く。
    */
   COLLECTION_SALT: string;
+
+  /**
+   * ElevenLabs Scribe v2（ASR / 文字起こし）の API キー（Phase 7 / P7-B1）。
+   * `apps/api/src/lib/scribe.ts` の `transcribe()` に渡す。
+   * `wrangler secret put ELEVENLABS_API_KEY` で本番に設定し、
+   * ローカル開発時は `.dev.vars` に書く（値はリポにコミットしない）。
+   *
+   * 実際の ASR 呼び出し配線（Durable Object / endpoint）は P7-B3 で行う。
+   */
+  ELEVENLABS_API_KEY: string;
+
+  /**
+   * Anthropic（Claude）API キー（Phase 7 / P7-B4）。
+   * StreamContextDO の要約パイプライン（alarm 内の L1/L2 生成）が
+   * AnthropicProvider 経由で使う。判定経路の apps/proxy とは別 Worker なので
+   * apps/api 独自に保持する。
+   * `wrangler secret put ANTHROPIC_API_KEY` で設定し、ローカルは `.dev.vars`。
+   */
+  ANTHROPIC_API_KEY: string;
 
   // ─── 公開 vars ────────────────────────────────────────
   /**

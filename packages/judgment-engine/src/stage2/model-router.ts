@@ -76,3 +76,29 @@ export function getEffectiveModel(tier: ModelTier): ModelConfig {
   void tier;
   return MODEL_CONFIGS.free;
 }
+
+/**
+ * 要約モデル設定（Phase 7 / P7-B4）。
+ *
+ * 判定（{@link getEffectiveModel}＝Haiku・高頻度・低レイテンシ）とは別系統。
+ * 音声文脈の rolling summary（L1/L2）は per-stream で**遅くて可・品質優先**
+ * （doc §4: 要約は JP 理解優先）。まず Anthropic 統一で Sonnet 4.6 を使い、
+ * Gemini 3.1 Pro への差し替えは後続（P7-B-Gemini）。
+ *
+ * - temperature: 要約は決定的すぎない方が自然なため 0.2（判定の 0 とは別）。
+ * - supportsCaching: false。要約は判定経路の cache_control 設計に影響させない。
+ */
+const SUMMARY_MODEL_CONFIG: ModelConfig = {
+  model: 'claude-sonnet-4-6',
+  maxTokens: 400,
+  temperature: 0.2,
+  supportsCaching: false,
+};
+
+/**
+ * 要約に使うモデル設定を返す（Phase 7 / P7-B4）。
+ * 判定用 {@link getEffectiveModel} とは独立に進化させる。
+ */
+export function getSummaryModel(): ModelConfig {
+  return SUMMARY_MODEL_CONFIG;
+}

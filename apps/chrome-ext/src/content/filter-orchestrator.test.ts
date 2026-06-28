@@ -61,3 +61,40 @@ describe('sendStage2Batch: recentAudio gating（P5-B4c）', () => {
     expect(captured.payload!.context!.recentAudio).toEqual(recentAudio);
   });
 });
+
+describe('sendStage2Batch: videoId 送信（P7-B5）', () => {
+  beforeEach(() => {
+    captured.payload = undefined;
+  });
+
+  it('videoId 未指定 → context に videoId が乗らない（後方互換）', async () => {
+    await sendStage2Batch(buildBatch(), buildSettings(), 'tok', vi.fn(), '動画タイトル');
+    expect('videoId' in captured.payload!.context!).toBe(false);
+  });
+
+  it('videoId 指定 → context.videoId にそのまま乗る', async () => {
+    await sendStage2Batch(
+      buildBatch(),
+      buildSettings(),
+      'tok',
+      vi.fn(),
+      '動画タイトル',
+      undefined,
+      'dQw4w9WgXcQ',
+    );
+    expect(captured.payload!.context!.videoId).toBe('dQw4w9WgXcQ');
+  });
+
+  it('videoId 空文字相当（undefined）は乗らない', async () => {
+    await sendStage2Batch(
+      buildBatch(),
+      buildSettings(),
+      'tok',
+      vi.fn(),
+      '動画タイトル',
+      undefined,
+      undefined,
+    );
+    expect('videoId' in captured.payload!.context!).toBe(false);
+  });
+});

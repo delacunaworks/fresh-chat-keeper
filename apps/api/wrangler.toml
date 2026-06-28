@@ -8,6 +8,14 @@ compatibility_date = "2026-04-27"
 #    例: `openssl rand -hex 32` で生成。salt は長期固定（変更すると過去
 #    ハッシュとの紐付けが切れる）。
 #
+# 1b. ELEVENLABS_API_KEY（secret、Phase 7 / P7-B1）: ASR（Scribe v2）文字起こし用。
+#    `wrangler secret put ELEVENLABS_API_KEY` で設定（値はこのファイルに書かない）。
+#    ローカル開発時は `.dev.vars` に書く。実際の ASR 呼び出し配線は P7-B3。
+#
+# 1c. ANTHROPIC_API_KEY（secret、Phase 7 / P7-B4）: StreamContextDO の要約
+#    パイプライン（L1/L2）が AnthropicProvider 経由で使う。
+#    `wrangler secret put ANTHROPIC_API_KEY` で設定。ローカルは `.dev.vars`。
+#
 # 2. ALLOWED_ORIGINS（var、本ファイル下部）: BACKGROUND-01 後は全 fetch が
 #    chrome-extension:// origin から発火するため、Chrome Web Store 公開後の
 #    本番 extension ID を `chrome-extension://<published-id>` の形式で設定する。
@@ -42,6 +50,18 @@ id = "3cb19ee1fcb34b83a296009474895862"  # ⚠ DEPLOY-01: 本番 ID に差し替
 [[kv_namespaces]]
 binding = "CONSENT_KV"
 id = "30f59e56c01c473aab81dd2d08f5faf4"  # ⚠ DEPLOY-01: 本番 ID に差し替え
+
+# ─── Durable Objects（Phase 7 / P7-B3）─────────────────────────────
+# 配信(video_id)単位の音声文脈 DO。SQLite-backed（new_sqlite_classes）なので
+# Workers 無料枠で動作する（KV-backed の new_classes は有料）。
+[[durable_objects.bindings]]
+name = "STREAM_CONTEXT_DO"
+class_name = "StreamContextDO"
+
+# DO の SQLite ストレージを有効化する migration（D1 の SQL migration とは別系統）。
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["StreamContextDO"]
 
 # CORS 許可 origin のカンマ区切りリスト。
 # BACKGROUND-01 後は chrome-extension origin のみで動作する設計。

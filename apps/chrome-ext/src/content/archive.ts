@@ -94,6 +94,8 @@ import {
 import type { JudgmentLabel } from '@fresh-chat-keeper/judgment-engine';
 // Phase 5 P5-B3: 字幕 DOM 抽出プロバイダ（収集）。P5-B4c: 判定への配線。
 import { createAudioContextProvider } from './captions/factory.js';
+import { CaptionFeeder } from './captions/feeder.js';
+import { postStreamCaptions } from './collection-client.js';
 import { qualityThresholdToNumber } from './captions/quality-threshold.js';
 import {
   captionCacheSignature,
@@ -155,6 +157,9 @@ function shutdownOnInvalidContext(): void {
   void flushUserStats();
   // Phase 3.5 B6: 開いていれば StatsPanel を片付け（context 喪失時の DOM leak 防止）
   closeStatsPanel();
+  // Phase 7 P7-FEED: 字幕 feeder 停止（タイマー解除 + バッファ破棄）
+  captionFeeder?.stop();
+  captionFeeder = null;
   // Phase 5 P5-B3: 字幕プロバイダ停止（observer 解除 + バッファ破棄）
   captionProvider?.stop();
   captionProvider = null;
@@ -179,6 +184,12 @@ const sessionTracker = new SessionTracker();
  * onStreamChange フックで reset される。
  */
 let captionProvider: AudioContextProvider | null = null;
+
+/**
+ * Phase 7（P7-FEED）字幕 feeder。captionProvider と同じライフサイクルで start/stop し、
+ * DOM 字幕を StreamContextDO へ定期 POST する（captionContext.enabled のときだけ）。
+ */
+let captionFeeder: CaptionFeeder | null = null;
 
 /**
  * Phase 5 P5-B4c: 字幕文脈の同期スナップショット。
@@ -455,6 +466,28 @@ export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
         currentPageMode === 'live' ? 'live' : 'archive',
       );
       captionProvider.start();
+
+      // Phase 7 P7-FEED: 字幕 feeder 起動。captionProvider から定期収集し DO へ POST。
+      // gating は getEnabled() が currentSettings.captionContext.enabled をライブ参照
+      // ＝設定変更に動的追従（OFF の間は収集も送信もしない）。送信は bg-fetch 経由で
+      // x-fck-token を付ける。videoId は既存 URL 判定から取得。
+      captionFeeder = new CaptionFeeder({
+        provider: captionProvider,
+        getEnabled: () => currentSettings?.captionContext.enabled === true,
+        getWindowSeconds: () => currentSettings?.captionContext.windowSeconds ?? 90,
+        getThreshold: () =>
+          currentSettings
+            ? qualityThresholdToNumber(currentSettings.captionContext.qualityThreshold)
+            : 0.5,
+        getVideoId: () => getVideoIdFromUrl(),
+        send: (videoId, segments) =>
+          postStreamCaptions(
+            { apiUrl: currentSettings?.collectionApiUrl ?? '', token: anonToken },
+            videoId,
+            segments,
+          ),
+      });
+      captionFeeder.start();
 
       // Phase 3.5: 視聴者フラグ機能の集計パイプライン起動。enabled でも OFF でも
       // 初期化は行う（onChanged で OFF→ON 切替に追従できるように）。
@@ -954,6 +987,9 @@ async function drainStage2Queue(): Promise<void> {
       // captionContext.enabled=false（既定）では captionSnapshot.recentAudio は
       // undefined のまま → context に乗らず v0.5.0 と完全同一のペイロード。
       await refreshCaptionSnapshot();
+      // P7-B5: video_id を載せる（あれば）。proxy がこれをキーに DO の rolling
+      // summary を Service Binding で引く。取得不能（空文字）なら従来どおり。
+      const videoIdForJudge = getVideoIdFromUrl();
       const success = await sendStage2Batch(
         batch,
         currentSettings,
@@ -961,6 +997,7 @@ async function drainStage2Queue(): Promise<void> {
         applyStage2Verdict,
         currentVideoTitle,
         captionSnapshot.recentAudio,
+        videoIdForJudge || undefined,
       );
       if (success) await incrementStage2Usage(batch.length);
 

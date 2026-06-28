@@ -18,6 +18,7 @@
   },
   "homepage": "https://github.com/delacunaworks/fresh-chat-keeper#readme",
   "dependencies": {
+    "@fresh-chat-keeper/judgment-engine": "workspace:*",
     "@fresh-chat-keeper/shared": "workspace:*",
     "hono": "^4.7.0"
   },

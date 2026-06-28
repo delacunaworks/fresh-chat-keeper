@@ -79,12 +79,16 @@ export interface JudgmentContext {
    */
   recentAudio?: { text: string; qualityScore: number };
   /**
-   * Phase 5 後段（拡張1: rolling summary）用。stream-level の累積文脈。
-   * **MVP では常に undefined**。後段で proxy が Durable Objects から自分で引く
-   * 別経路（captions ingest）で埋める。MVP の API 契約は recentAudio のみに限定し、
-   * 後段で chrome-ext の送信ロジックを触らずに済むよう、型だけ今切っておく。
+   * Phase 7（P7-B5）rolling summary。stream-level の累積/近傍文脈。
+   * proxy が Service Binding 経由で StreamContextDO の getRecentSummary を引き、
+   * `whole`（L2 全体累積要約）/ `recent`（L1 近傍要約）を埋める。
+   * prompt-builder は Block3（cache_control 境界の外）に whole→recent→verbatim の
+   * 順で「あれば 1 セクション」載せる（doc §3）。両 optional で、DO 未投入や
+   * 取得失敗時は undefined（その場合は recentAudio のフォールバックに委ねる）。
+   *
+   * ※ Phase 5 は `{ text }` だったが P7-B5 で `{ whole?, recent? }` に拡張。
    */
-  streamSummary?: { text: string };
+  streamSummary?: { whole?: string; recent?: string };
 }
 
 /**
