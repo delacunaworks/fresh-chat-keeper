@@ -95,7 +95,9 @@ export async function transcribe(
   form.append('model_id', SCRIBE_MODEL_ID);
   form.append('language_code', languageCode);
 
-  const doFetch = opts.fetchImpl ?? fetch;
+  // workerd の fetch は this 感受性あり。素の参照の detached 呼び出しは
+  // "Illegal invocation" になり得るため globalThis に bind する（provider.ts と同件）。
+  const doFetch = opts.fetchImpl ?? fetch.bind(globalThis);
 
   let response: Response;
   try {

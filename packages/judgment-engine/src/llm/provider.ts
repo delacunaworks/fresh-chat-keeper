@@ -132,7 +132,11 @@ export class AnthropicProvider implements LLMProvider {
 
   constructor(options: AnthropicProviderOptions) {
     this.apiKey = options.apiKey;
-    this.fetchImpl = options.fetchImpl ?? fetch;
+    // Cloudflare Workers (workerd) の fetch は this 感受性があり、素の関数参照を
+    // 保持して `this.fetchImpl(...)` と呼ぶと this がインスタンスになって
+    // "Illegal invocation" で落ちる（Node の vitest では再現しないため単体テストを
+    // すり抜けた。本番 DO alarm で発覚）。既定は必ず globalThis に bind する。
+    this.fetchImpl = options.fetchImpl ?? fetch.bind(globalThis);
     this.anthropicVersion = options.anthropicVersion ?? DEFAULT_ANTHROPIC_VERSION;
     this.endpoint = options.endpoint ?? ANTHROPIC_MESSAGES_ENDPOINT;
   }
