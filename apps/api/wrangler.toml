@@ -16,6 +16,11 @@ compatibility_date = "2026-04-27"
 #    パイプライン（L1/L2）が AnthropicProvider 経由で使う。
 #    `wrangler secret put ANTHROPIC_API_KEY` で設定。ローカルは `.dev.vars`。
 #
+# 1d. ADMIN_INGEST_TOKEN（secret、Phase 7 / AR-1）: アーカイブ transcript 一括
+#    取り込み（POST /v1/stream-context/transcript）の管理者トークン。運営 CLI
+#    （AR-2）だけが x-fck-admin-token ヘッダで提示する（一般 x-fck-token とは別物）。
+#    `wrangler secret put ADMIN_INGEST_TOKEN` で設定（値はこのファイルに書かない）。
+#
 # 2. ALLOWED_ORIGINS（var、本ファイル下部）: BACKGROUND-01 後は全 fetch が
 #    chrome-extension:// origin から発火するため、Chrome Web Store 公開後の
 #    本番 extension ID を `chrome-extension://<published-id>` の形式で設定する。
