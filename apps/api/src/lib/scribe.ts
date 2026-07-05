@@ -30,15 +30,39 @@ const DEFAULT_LANGUAGE_CODE = 'jpn';
 const ERROR_BODY_MAX_LEN = 300;
 
 /**
+ * Scribe v2 の word/segment 単位タイムスタンプ（AR-2 で利用）。
+ *
+ * ElevenLabs `speech-to-text` は本文 `text` に加え `words[]` を返す。各要素は
+ * `start`/`end`（秒）付きで、`type` は 'word' | 'spacing' | 'audio_event'。
+ * VOD をチャンク転写する際、これを 15〜30 秒粒度の segment に束ねてタイムスタンプを
+ * 付与する（AR-1 の transcript 取り込みに渡す）。
+ */
+export interface TranscribeWord {
+  /** トークン本文（'spacing' の場合は空白そのもの）。 */
+  text: string;
+  /** 開始秒（チャンク先頭からの相対）。 */
+  start: number;
+  /** 終了秒（チャンク先頭からの相対）。 */
+  end: number;
+  /** 'word' | 'spacing' | 'audio_event' 等（provider 依存）。 */
+  type?: string;
+  /** 話者 ID（diarization 有効時）。 */
+  speaker_id?: string;
+}
+
+/**
  * 文字起こしの結果。throw ではなく成否を型で返す（Result 型パターン）。
  *
  * 失敗の `kind`:
  * - 'config':  呼び出し側の設定不備（API キー未指定 / 空 / 音声が空）。送信前に検出。
  * - 'http':    Scribe が非 2xx を返した（status と本文抜粋を載せる）。
  * - 'network': fetch 自体が throw（DNS / TLS / オフライン等）。
+ *
+ * 成功時 `words` は**レスポンスにタイムスタンプが含まれる場合のみ**付く（後方互換:
+ * 従来 text だけを見る呼び出し側は影響を受けない）。
  */
 export type TranscribeResult =
-  | { ok: true; text: string }
+  | { ok: true; text: string; words?: TranscribeWord[] }
   | { ok: false; kind: 'config' | 'http' | 'network'; status?: number; message: string };
 
 /**
@@ -58,9 +82,10 @@ export interface TranscribeOptions {
   fetchImpl?: typeof fetch;
 }
 
-/** Scribe v2 の成功レスポンス形状（少なくとも text を取り出せればよい）。 */
+/** Scribe v2 の成功レスポンス形状（text 必須、words は任意）。 */
 interface ScribeSuccessBody {
   text?: unknown;
+  words?: unknown;
 }
 
 /**
@@ -145,8 +170,33 @@ export async function transcribe(
     };
   }
 
-  // 生 text をそのまま返す（かな正規化しない）。
-  return { ok: true, text: body.text };
+  // 生 text をそのまま返す（かな正規化しない）。words はタイムスタンプがあれば付与。
+  const words = parseWords(body.words);
+  return { ok: true, text: body.text, ...(words.length > 0 ? { words } : {}) };
+}
+
+/**
+ * レスポンスの `words` を {@link TranscribeWord}[] に正規化する。
+ * 不正要素（start/end が数値でない等）は捨てる。タイムスタンプが無ければ空配列。
+ */
+function parseWords(raw: unknown): TranscribeWord[] {
+  if (!Array.isArray(raw)) return [];
+  const out: TranscribeWord[] = [];
+  for (const w of raw) {
+    if (typeof w !== 'object' || w === null) continue;
+    const o = w as Record<string, unknown>;
+    if (typeof o.text !== 'string') continue;
+    if (typeof o.start !== 'number' || !Number.isFinite(o.start)) continue;
+    if (typeof o.end !== 'number' || !Number.isFinite(o.end)) continue;
+    out.push({
+      text: o.text,
+      start: o.start,
+      end: o.end,
+      ...(typeof o.type === 'string' ? { type: o.type } : {}),
+      ...(typeof o.speaker_id === 'string' ? { speaker_id: o.speaker_id } : {}),
+    });
+  }
+  return out;
 }
 
 /** Response.text() を安全に読む（読めなくてもエラー化しない）。 */
@@ -169,4 +219,5 @@ export const __test__ = {
   SCRIBE_MODEL_ID,
   DEFAULT_LANGUAGE_CODE,
   ERROR_BODY_MAX_LEN,
+  parseWords,
 };
