@@ -113,6 +113,11 @@ interface NewJudgeRequest {
      * の recentAudio のみ）。
      */
     videoId?: string;
+    /**
+     * Phase 7（AR-3）: 視聴者の再生位置（秒）。あれば summary 取得に &t= を付けて
+     * アーカイブ transcript の T までの文脈を引く（★T より未来は返らない）。
+     */
+    currentTimeSeconds?: number;
   };
   tier?: ModelTier;
 }
@@ -124,6 +129,8 @@ interface NormalizedRequest {
   tier: ModelTier;
   /** Phase 7（P7-B5）: 音声文脈を DO から引くための video_id（新形式のみ・任意）。 */
   videoId?: string;
+  /** Phase 7（AR-3）: 視聴者の再生位置（秒・新形式のみ・任意）。summary の &t= に使う。 */
+  currentTimeSeconds?: number;
   /**
    * verdict 計算（lenient/standard/strict ベース）に使う旧 FilterMode 値。
    * judgment-engine の `categories.spoiler.strength` と互換。
@@ -267,9 +274,16 @@ async function enrichWithStreamSummary(
   const videoId = normalized.videoId;
   if (!videoId || !env.API) return; // videoId / binding なし → フォールバック
 
+  // AR-3: 再生位置があれば &t= を付ける（アーカイブ transcript の T までの文脈。
+  // ★T より未来は DO 側で返さない）。無ければ従来どおり live rolling のみ。
+  const tParam =
+    typeof normalized.currentTimeSeconds === 'number'
+      ? `&t=${encodeURIComponent(String(normalized.currentTimeSeconds))}`
+      : '';
+
   try {
     const res = await env.API.fetch(
-      `https://fck-api/v1/stream-context/summary?videoId=${encodeURIComponent(videoId)}`,
+      `https://fck-api/v1/stream-context/summary?videoId=${encodeURIComponent(videoId)}${tParam}`,
     );
     if (!res.ok) {
       console.warn(`[FreshChatKeeper] stream-context summary HTTP ${res.status}; using fallback`);
@@ -362,6 +376,12 @@ function normalizeRequest(body: Record<string, unknown>): NormalizedRequest {
       // P7-B5: 音声文脈を DO から引くための video_id（あれば）。
       ...(typeof newReq.context.videoId === 'string' && newReq.context.videoId.length > 0
         ? { videoId: newReq.context.videoId }
+        : {}),
+      // AR-3: 視聴者の再生位置（あれば）。summary 取得の &t= に使う。
+      ...(typeof newReq.context.currentTimeSeconds === 'number' &&
+      Number.isFinite(newReq.context.currentTimeSeconds) &&
+      newReq.context.currentTimeSeconds >= 0
+        ? { currentTimeSeconds: newReq.context.currentTimeSeconds }
         : {}),
     };
   }

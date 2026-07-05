@@ -7,15 +7,16 @@
  *   - v0.4.0〜（Phase 3）: version: 3
  *   - v0.5.0〜（Phase 3.5）: version: 4（userFlagging 追加）
  *   - v0.6.0〜（Phase 5）: version: 5（captionContext 追加）
+ *   - v0.7.0〜（Phase 7 / AR-3）: version: 6（captionContext 廃止 → audioContext 新設）
  *
  * 拡張更新後の最初の起動で本ローダーが:
  *   1. fck_settings を読み込む
- *   2. version === 5 ならそのまま使用（最新世代）
- *   3. version === 4 なら:
- *      - 旧データを `fck_settings_v4_backup` にバックアップ
- *      - version: 5 を付与して fck_settings に書き戻す
- *   4. version === 3 / 2 / なし（v1）も同様に各 backup へ退避し v5 へ
- *      （v1〜v3 から飛び級でも DEFAULT マージで全フィールド補完される）
+ *   2. version === 6 ならそのまま使用（最新世代）
+ *   3. version === 5 なら:
+ *      - 旧データを `fck_settings_v5_backup` にバックアップ
+ *      - version: 6 を付与し、廃止フィールド captionContext を除去して書き戻す
+ *   4. version === 4 / 3 / 2 / なし（v1）も同様に各 backup へ退避し v6 へ
+ *      （飛び級でも DEFAULT マージで全フィールド補完 + captionContext 除去）
  *
  * 設計判断:
  * - shared の {@link import('@fresh-chat-keeper/shared').migrateSettings} は
@@ -41,6 +42,7 @@ import {
   SETTINGS_V2_BACKUP_KEY as SHARED_V2_BACKUP_KEY,
   SETTINGS_V3_BACKUP_KEY as SHARED_V3_BACKUP_KEY,
   SETTINGS_V4_BACKUP_KEY as SHARED_V4_BACKUP_KEY,
+  SETTINGS_V5_BACKUP_KEY as SHARED_V5_BACKUP_KEY,
 } from '@fresh-chat-keeper/shared';
 import {
   DEFAULT_SETTINGS,
@@ -48,8 +50,8 @@ import {
   type Settings,
 } from './settings.js';
 
-/** chrome-ext 設定の最新スキーマ世代。v0.6.0 / Phase 5 以降は 5。 */
-export const CURRENT_SETTINGS_VERSION = 5 as const;
+/** chrome-ext 設定の最新スキーマ世代。v0.7.0 / Phase 7（AR-3）以降は 6。 */
+export const CURRENT_SETTINGS_VERSION = 6 as const;
 
 /**
  * v1 → 現行世代マイグレーション時のバックアップキー。
@@ -74,6 +76,12 @@ export const SETTINGS_V3_BACKUP_KEY = SHARED_V3_BACKUP_KEY;
  * shared 定数（`fck_settings_v4_backup`）を再エクスポート。
  */
 export const SETTINGS_V4_BACKUP_KEY = SHARED_V4_BACKUP_KEY;
+
+/**
+ * v5 → v6 マイグレーション時のバックアップキー（Phase 7 / AR-3 新規）。
+ * shared 定数（`fck_settings_v5_backup`）を再エクスポート。
+ */
+export const SETTINGS_V5_BACKUP_KEY = SHARED_V5_BACKUP_KEY;
 
 /**
  * 旧名拡張時代に使用していた `flc_*` プレフィックスキー。
@@ -141,28 +149,45 @@ export async function loadSettings(): Promise<Settings> {
 
   const storedVersion = readStoredVersion(raw);
 
-  // 最新世代（v5）: そのまま使用
+  // 最新世代（v6）: そのまま使用
   if (storedVersion === CURRENT_SETTINGS_VERSION) {
     return stripVersion(raw as StoredSettings);
   }
 
-  // v4 → v5: fck_settings_v4_backup に退避してから書き戻し
+  // v5 → v6: fck_settings_v5_backup に退避してから書き戻し（captionContext 廃止）
+  if (storedVersion === 5) {
+    return await migrateToCurrentVersion(raw, SETTINGS_V5_BACKUP_KEY, 'v5 → v6');
+  }
+
+  // v4 → v6: fck_settings_v4_backup に退避してから書き戻し
   if (storedVersion === 4) {
-    return await migrateToCurrentVersion(raw, SETTINGS_V4_BACKUP_KEY, 'v4 → v5');
+    return await migrateToCurrentVersion(raw, SETTINGS_V4_BACKUP_KEY, 'v4 → v6');
   }
 
-  // v3 → v5: fck_settings_v3_backup に退避してから書き戻し
+  // v3 → v6: fck_settings_v3_backup に退避してから書き戻し
   if (storedVersion === 3) {
-    return await migrateToCurrentVersion(raw, SETTINGS_V3_BACKUP_KEY, 'v3 → v5');
+    return await migrateToCurrentVersion(raw, SETTINGS_V3_BACKUP_KEY, 'v3 → v6');
   }
 
-  // v2 → v5: fck_settings_v2_backup に退避してから書き戻し
+  // v2 → v6: fck_settings_v2_backup に退避してから書き戻し
   if (storedVersion === 2) {
-    return await migrateToCurrentVersion(raw, SETTINGS_V2_BACKUP_KEY, 'v2 → v5');
+    return await migrateToCurrentVersion(raw, SETTINGS_V2_BACKUP_KEY, 'v2 → v6');
   }
 
   // version なし（v1）or 不明な値 → v1 backup に退避してから書き戻し
-  return await migrateToCurrentVersion(raw, SETTINGS_V1_BACKUP_KEY, 'v1 → v5');
+  return await migrateToCurrentVersion(raw, SETTINGS_V1_BACKUP_KEY, 'v1 → v6');
+}
+
+/**
+ * 廃止フィールドを除去する（AR-3: captionContext は audioContext に置換され、
+ * DEFAULT マージ後も raw 由来の captionContext が残るため明示削除する）。
+ * 旧値は audioContext に引き継がない（字幕とは別機能のため一律 OFF で開始）。
+ */
+function stripRetiredFields(merged: Settings): Settings {
+  if ('captionContext' in merged) {
+    delete (merged as Settings & { captionContext?: unknown }).captionContext;
+  }
+  return merged;
 }
 
 /**
@@ -197,8 +222,8 @@ function debugTriggerVisibilityFallback(
 function stripVersion(raw: StoredSettings): Settings {
   const { version: _ignore, ...rest } = raw;
   void _ignore;
-  debugTriggerVisibilityFallback(rest as Partial<Settings>, 'v4 読み出し');
-  const merged: Settings = { ...DEFAULT_SETTINGS, ...rest };
+  debugTriggerVisibilityFallback(rest as Partial<Settings>, 'v6 読み出し');
+  const merged: Settings = stripRetiredFields({ ...DEFAULT_SETTINGS, ...rest });
   // B4a hardening 🟡: 重要フィールドの型が壊れていたら警告して DEFAULT に補正。
   // chrome.storage は別拡張・手動編集・旧バグで型不整合が混入しうる。
   // サイレント補正だとサポート時に原因究明できないため warn で可視化する。
@@ -226,7 +251,7 @@ function stripVersion(raw: StoredSettings): Settings {
 }
 
 /**
- * chrome.storage.local に設定を保存する。常に最新世代 `version: 5` を付与する。
+ * chrome.storage.local に設定を保存する。常に最新世代 `version: 6` を付与する。
  *
  * 直接 `chrome.storage.local.set({ [STORAGE_KEY]: ... })` を呼ぶと version
  * フィールドが剥がれて毎回マイグレーション + バックアップ再生成が走るため、
@@ -266,7 +291,8 @@ async function migrateToCurrentVersion(
 
   const partial = isValidShape ? (raw as Partial<Settings>) : {};
   debugTriggerVisibilityFallback(partial, `${label} マイグレーション`);
-  const merged: Settings = { ...DEFAULT_SETTINGS, ...partial };
+  // AR-3: 廃止フィールド（captionContext）を除去。audioContext は DEFAULT の OFF で開始。
+  const merged: Settings = stripRetiredFields({ ...DEFAULT_SETTINGS, ...partial });
   // version は付け直すので merged 側に残った旧 version は stored で上書きされる
   const stored: StoredSettings = { ...merged, version: CURRENT_SETTINGS_VERSION };
 
@@ -280,7 +306,7 @@ async function migrateToCurrentVersion(
   await chrome.storage.local.set(updates);
 
   console.log(
-    `[FreshChatKeeper] 設定スキーマを v5 にマイグレーションしました（${label}、旧データは ${backupKey} に保存）`,
+    `[FreshChatKeeper] 設定スキーマを v6 にマイグレーションしました（${label}、旧データは ${backupKey} に保存）`,
   );
 
   return merged;

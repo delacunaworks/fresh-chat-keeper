@@ -20,6 +20,7 @@ import {
   MAX_SEGMENT_TEXT_LENGTH,
   COLLECT_INTERVAL_MS,
   FLUSH_INTERVAL_MS,
+  CAPTION_FEEDER_ENABLED,
 } from './feeder.js';
 import type { RecentAudioContext } from '@fresh-chat-keeper/judgment-engine';
 import type { BackgroundFetchResponse } from '@fresh-chat-keeper/shared';
@@ -225,48 +226,37 @@ describe('CaptionFeeder — flush', () => {
   });
 });
 
-describe('CaptionFeeder — start/stop ライフサイクル', () => {
+describe('CaptionFeeder — 凍結（AR-3 / P7-FEED freeze）', () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it('start でタイマーが動き、collect/flush が周期実行される', async () => {
+  it('CAPTION_FEEDER_ENABLED は false（凍結中）', () => {
+    expect(CAPTION_FEEDER_ENABLED).toBe(false);
+  });
+
+  it('凍結中は start() が no-op でタイマーを張らない（collect/flush 非実行）', async () => {
     const { feeder, getRecentContext, send } = makeFeeder();
     let n = 0;
     getRecentContext.mockImplementation(async () => rc(`s-${n++}`, n));
     feeder.start();
-    expect(feeder._isRunning()).toBe(true);
+    expect(feeder._isRunning()).toBe(false); // 起動しない
 
-    // collect 周期を 1 回・flush 周期を 1 回進める
-    await vi.advanceTimersByTimeAsync(COLLECT_INTERVAL_MS);
-    expect(getRecentContext).toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(FLUSH_INTERVAL_MS);
-    expect(send).toHaveBeenCalled();
+    // 周期を大きく進めても collect / flush は走らない。
+    await vi.advanceTimersByTimeAsync(COLLECT_INTERVAL_MS + FLUSH_INTERVAL_MS);
+    expect(getRecentContext).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
 
     feeder.stop();
   });
 
-  it('stop でタイマー停止 + buffer クリア', async () => {
-    const { feeder, getRecentContext, send } = makeFeeder();
+  it('stop は凍結中でも安全（buffer クリア）', async () => {
+    const { feeder, getRecentContext } = makeFeeder();
     getRecentContext.mockResolvedValue(rc('x', 1));
-    feeder.start();
+    // collect ロジック自体は凍結と無関係に呼べる（将来ライブ RT 用）。
     await feeder.collectOnce();
     expect(feeder._bufferSize()).toBe(1);
-
     feeder.stop();
     expect(feeder._isRunning()).toBe(false);
     expect(feeder._bufferSize()).toBe(0);
-
-    // stop 後はタイマーが進んでも何も起きない
-    send.mockClear();
-    await vi.advanceTimersByTimeAsync(FLUSH_INTERVAL_MS * 2);
-    expect(send).not.toHaveBeenCalled();
-  });
-
-  it('多重 start は無視（タイマー二重化しない）', () => {
-    const { feeder } = makeFeeder();
-    feeder.start();
-    feeder.start();
-    expect(feeder._isRunning()).toBe(true);
-    feeder.stop();
   });
 });

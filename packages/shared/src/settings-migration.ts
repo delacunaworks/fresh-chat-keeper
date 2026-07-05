@@ -59,6 +59,14 @@ export const SETTINGS_V3_BACKUP_KEY = 'fck_settings_v3_backup';
  */
 export const SETTINGS_V4_BACKUP_KEY = 'fck_settings_v4_backup';
 
+/**
+ * v5 → v6 マイグレーション時のバックアップキー（Phase 7 / AR-3 新規）。
+ *
+ * v0.6.0 の version: 5 設定（captionContext 含む）を保持したまま v6
+ * （captionContext 廃止 → audioContext 新設）に書き換える際の退避先。
+ */
+export const SETTINGS_V5_BACKUP_KEY = 'fck_settings_v5_backup';
+
 /** v3 のデフォルト値（不正入力時のフォールバック） */
 function getDefaultSettings(): FilterSettings {
   return {

@@ -10,11 +10,13 @@
  * - キャッシュは `chrome-cache.ts`（既存仕様 fck_judge_cache）を維持
  *
  * archive.ts からは
- * `sendStage2Batch(batch, settings, token, onResult, videoTitle, recentAudio)` で
- * 呼ばれる。`recentAudio`（Phase 5 / P5-B4c）は **captionContext.enabled の
- * ときだけ archive.ts が渡す**（OFF の大多数では undefined = 従来と完全同一の
- * ペイロード）。本モジュールは captionProvider に依存しない（テスト容易性のため、
- * gating + 字幕取得は archive.ts に置き、結果だけ受け取る）。
+ * `sendStage2Batch(batch, settings, token, onResult, videoTitle, videoId, currentTimeSeconds)`
+ * で呼ばれる。`currentTimeSeconds`（AR-3）は **audioContext.enabled のときだけ
+ * archive.ts が渡す**（OFF の大多数では undefined = 従来と完全同一のペイロード）。
+ * proxy はこれを summary 取得の `&t=` に使う（再生位置までの transcript 文脈）。
+ *
+ * ※ Phase 5 の DOM 字幕 recentAudio 同梱は AR-3 で送信停止（proxy 側の recentAudio
+ * fallback 受け口は互換のため残るが、拡張はもう送らない）。
  */
 
 import type { Settings, GameProgress } from '../shared/settings.js';
@@ -48,13 +50,13 @@ export async function sendStage2Batch(
   token: string,
   onResult: OnStage2Result,
   videoTitle?: string,
-  recentAudio?: { text: string; qualityScore: number },
   videoId?: string,
+  currentTimeSeconds?: number,
 ): Promise<boolean> {
   if (batch.length === 0) return true;
 
   const transport = createChromeTransport(settings.proxyUrl, token);
-  const payload = buildJudgeRequestPayload(batch, settings, videoTitle, recentAudio, videoId);
+  const payload = buildJudgeRequestPayload(batch, settings, videoTitle, videoId, currentTimeSeconds);
 
   let response;
   try {
@@ -148,8 +150,8 @@ function buildJudgeRequestPayload(
   batch: Stage2Candidate[],
   settings: Settings,
   videoTitle: string | undefined,
-  recentAudio: { text: string; qualityScore: number } | undefined,
   videoId: string | undefined,
+  currentTimeSeconds: number | undefined,
 ): JudgeRequestPayload {
   const context = buildJudgmentContext(settings, videoTitle);
   // B4a: shared JudgeRequest に context?/tier? を後方互換追加したので
@@ -159,13 +161,13 @@ function buildJudgeRequestPayload(
     context: {
       ...(context.game ? { game: context.game } : {}),
       settings: context.settings,
-      // P5-B4c: 字幕文脈（captionContext.enabled のときだけ archive.ts が渡す）。
-      // undefined（既定・字幕 OFF）なら context に乗らず、v0.5.0 と完全同一の
-      // ペイロード。proxy はこれを Block3（cache_control なし）に乗せる。
-      ...(recentAudio ? { recentAudio } : {}),
-      // P7-B5: video_id（あれば）。proxy がこれをキーに DO の rolling summary を
-      // Service Binding で引く。空文字は載せない。
+      // P7-B5: video_id（あれば）。proxy がこれをキーに DO の rolling summary /
+      // transcript を Service Binding で引く。空文字は載せない。
       ...(videoId ? { videoId } : {}),
+      // AR-3: 再生位置（audioContext.enabled のときだけ archive.ts が渡す）。
+      // undefined（既定・OFF）なら context に乗らず v0.6.0 と完全同一のペイロード。
+      // proxy はこれを summary 取得の &t= に使う（再生位置までの transcript 文脈）。
+      ...(typeof currentTimeSeconds === 'number' ? { currentTimeSeconds } : {}),
     },
     tier: 'free',
   };
