@@ -26,10 +26,12 @@ import { blockUser } from '../user-blocking/blocking.js';
 import { showBlockUndoToast } from '../user-blocking/undo-toast.js';
 import type { SessionTracker } from './session-tracker.js';
 import { DailyTimeline } from './DailyTimeline.js';
+import { getSessionComments, PER_USER_MAX, type SessionComment } from './session-comment-log.js';
 import {
   extractPeriodStats,
   type FlaggedCounts,
   type FlagEvaluationResult,
+  type JudgmentLabel,
   type UserStatsEntry,
 } from '@fresh-chat-keeper/judgment-engine';
 
@@ -64,6 +66,25 @@ const CATEGORY_LABELS: Array<[keyof FlaggedCounts, string]> = [
   ['offTopic', '無関係・他配信者'],
 ];
 
+/**
+ * F-1: 配信内コメントのマーカー（JudgmentLabel → 表示名）。
+ * 'safe' は「FCK がフィルタ/フラグしていない」意なのでマーカーを付けない。
+ */
+const JUDGMENT_LABEL_JP: Partial<Record<JudgmentLabel, string>> = {
+  harassment: '暴言',
+  spoiler: 'ネタバレ',
+  backseat: '指示厨',
+  spam: 'スパム',
+  off_topic: '無関係',
+};
+
+/** コメント時刻を HH:MM:SS（ローカル）に整形（F-1 の時刻順表示用）。 */
+function formatCommentTime(ms: number): string {
+  const d = new Date(ms);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+
 function flagLevelBadge(level: FlagEvaluationResult['level']): {
   text: string;
   cls: string;
@@ -91,6 +112,10 @@ export function StatsPanel({
   const [data, setData] = useState<PanelData | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyAction, setBusyAction] = useState<null | 'block' | 'reset'>(null);
+  // F-1: 配信内コメント（メモリバッファの同期スナップショット。mount 時に 1 度読む）。
+  const [sessionComments] = useState<SessionComment[]>(() =>
+    getSessionComments(userChannelId),
+  );
 
   useModalA11y({ open: true, containerRef, onClose });
 
@@ -283,6 +308,12 @@ export function StatsPanel({
               </section>
             </>
           )}
+
+          {/* F-1（決定4b）: この配信でのコメント（時刻順・全表示・端末内・非永続）。
+              stats entry の有無に関わらず、バッファにコメントがあれば表示する。 */}
+          {!loading && (
+            <SessionCommentsSection comments={sessionComments} />
+          )}
         </div>
 
         <footer className="fck-stats-footer">
@@ -308,6 +339,41 @@ export function StatsPanel({
   );
 }
 
+/**
+ * F-1: 「この配信でのコメント」セクション。
+ *
+ * バッファ内の対象ユーザーのコメントを **時刻順に全表示**（通常コメントも含む）。
+ * FCK が判定/フラグしたものには JP カテゴリ badge を併記（判定の説明責任）。
+ * ガードレール: 端末内・非永続・**エクスポート/コピー UI なし**（表示のみ）。
+ */
+function SessionCommentsSection({ comments }: { comments: SessionComment[] }): JSX.Element {
+  return (
+    <section className="fck-stats-section fck-stats-comments" aria-label="この配信でのコメント">
+      <h3 className="fck-stats-h3">この配信でのコメント</h3>
+      <p className="fck-stats-comments-note">
+        この配信内のみ・端末内のみ・保存されません（最大 {PER_USER_MAX} 件）
+      </p>
+      {comments.length === 0 ? (
+        <p className="fck-stats-empty">この配信でのコメントはまだありません。</p>
+      ) : (
+        <ol className="fck-stats-comment-list">
+          {comments.map((c, i) => {
+            const marker =
+              c.primary && c.primary !== 'safe' ? JUDGMENT_LABEL_JP[c.primary] : undefined;
+            return (
+              <li key={`${c.time}-${i}`} className="fck-stats-comment-item">
+                <span className="fck-stats-comment-time">{formatCommentTime(c.time)}</span>
+                {marker && <span className="fck-stats-comment-mark">{marker}</span>}
+                <span className="fck-stats-comment-text">{c.text}</span>
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </section>
+  );
+}
+
 function formatObservationRange(entry: UserStatsEntry): string {
   const first = entry.firstSeenAt > 0 ? new Date(entry.firstSeenAt) : null;
   const last = entry.lastSeenAt > 0 ? new Date(entry.lastSeenAt) : null;
@@ -316,4 +382,12 @@ function formatObservationRange(entry: UserStatsEntry): string {
   return `${fmt(first)} 〜 ${fmt(last)}`;
 }
 
-export const __test__ = { flagLevelBadge, formatObservationRange, SCOPE_LABEL, CATEGORY_LABELS };
+export const __test__ = {
+  flagLevelBadge,
+  formatObservationRange,
+  SCOPE_LABEL,
+  CATEGORY_LABELS,
+  SessionCommentsSection,
+  JUDGMENT_LABEL_JP,
+  formatCommentTime,
+};

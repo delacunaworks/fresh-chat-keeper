@@ -310,6 +310,49 @@ const STYLE_TEXT = `
 .fck-daily-clean { background: #e8f5ec; border-color: #d4ead9; }
 .fck-daily-low { background: #fff4cf; border-color: #f0d57a; }
 .fck-daily-high { background: #fbcfcf; border-color: #f0a0a0; }
+
+/* === F-1: この配信でのコメント === */
+.fck-stats-comments-note {
+  font-size: 11px;
+  color: #888;
+  margin: 0 0 8px;
+}
+.fck-stats-comment-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+}
+.fck-stats-comment-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid #f5f5f5;
+}
+.fck-stats-comment-item:last-child { border-bottom: none; }
+.fck-stats-comment-time {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: #999;
+}
+.fck-stats-comment-mark {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: #c62828;
+  background: #fde7e7;
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+.fck-stats-comment-text {
+  color: #202020;
+  word-break: break-word;
+}
 `;
 
 function ensureStylesInjected(): void {

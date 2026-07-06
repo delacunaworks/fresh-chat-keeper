@@ -87,6 +87,12 @@ import { initAggregator, recordAggregate } from './user-flagging/aggregator.js';
 import { applyFlagToMessage, initUiOverlay } from './user-flagging/ui-overlay.js';
 // Phase 3.5 B6: 統計詳細パネル（クリックモーダル、menu-manager onStats 経由で開く）
 import { openStatsPanel, closeCurrent as closeStatsPanel } from './user-flagging/stats-panel-entry.js';
+// F-1（決定4b）: StatsPanel の「この配信でのコメント」用セッション内バッファ（表示専用・非永続）
+import {
+  recordSessionComment,
+  markSessionComment,
+  clearSessionCommentLog,
+} from './user-flagging/session-comment-log.js';
 import {
   flushAll as flushUserStats,
   clearAllCached,
@@ -153,6 +159,8 @@ function shutdownOnInvalidContext(): void {
   void flushUserStats();
   // Phase 3.5 B6: 開いていれば StatsPanel を片付け（context 喪失時の DOM leak 防止）
   closeStatsPanel();
+  // F-1（決定4b ガードレール2）: 配信内コメントログを破棄（永続化なし・離脱で消える）。
+  clearSessionCommentLog();
   // AR-3: 音声文脈スナップショットを nocap に戻す（context 喪失後の残留防止）。
   // 字幕 provider / feeder は AR-3 で判定経路から撤去済み（凍結）。
   audioSnapshot = { sig: 'nocap' };
@@ -735,6 +743,9 @@ function processMessage(el: Element, isReprocess = false): void {
   // 新規コメントもここで遡及非表示と同じテキスト書き換えで隠す（セッション継続）。
   const authorChannelId = getAuthorChannelIdFromElement(el);
   attachActionBar(el, authorChannelId, text);
+  // F-1（決定4b）: 配信内コメントログに全コメントを記録（表示専用・非永続）。
+  // author 未取得なら per-user 表示できないので no-op。マーカーは emitJudgmentForElement で付与。
+  if (authorChannelId) recordSessionComment(authorChannelId, text);
   if (authorChannelId && isUserBlocked(authorChannelId)) {
     applyFilter(el, text, 'ユーザーブロック', undefined, 'user_block');
     return;
@@ -986,6 +997,13 @@ function emitJudgmentForElement(
   const videoId = getVideoIdFromUrl();
   const channelId = getChannelIdFromDom();
   const targetAuthorChannelId = getAuthorChannelIdFromElement(el);
+
+  // F-1（決定4b）: 配信内コメントログに FCK 判定マーカーを付与（collection emit の
+  // 可否とは独立。videoId/channelId 欠落で下の guard で return しても mark は済ませる）。
+  // CollectionLabel と JudgmentLabel はメンバー集合が同一（recordAggregate と同じキャスト）。
+  if (targetAuthorChannelId) {
+    markSessionComment(targetAuthorChannelId, text, judgment.primaryLabel as JudgmentLabel);
+  }
 
   // 必須フィールドが欠けている場合は emit を諦める（apps/api の 422 を避ける）。
   // サイレント失敗を避けるため、欠けたフィールドを warn で 1 度だけ通知する
