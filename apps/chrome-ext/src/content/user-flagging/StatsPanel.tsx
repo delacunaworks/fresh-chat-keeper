@@ -78,11 +78,18 @@ const JUDGMENT_LABEL_JP: Partial<Record<JudgmentLabel, string>> = {
   off_topic: '無関係',
 };
 
-/** コメント時刻を HH:MM:SS（ローカル）に整形（F-1 の時刻順表示用）。 */
-function formatCommentTime(ms: number): string {
-  const d = new Date(ms);
+/**
+ * 動画の再生位置（秒）を h:mm:ss / m:ss に整形（F-1 表示用）。
+ * アーカイブでは「配信のどの地点のコメントか」を示す。取得不能なら '—'。
+ */
+function formatCommentTime(videoTime: number | undefined): string {
+  if (videoTime === undefined || !Number.isFinite(videoTime) || videoTime < 0) return '—';
+  const s = Math.floor(videoTime);
   const p = (n: number) => String(n).padStart(2, '0');
-  return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return h > 0 ? `${h}:${p(m)}:${p(sec)}` : `${m}:${p(sec)}`;
 }
 
 function flagLevelBadge(level: FlagEvaluationResult['level']): {
@@ -362,7 +369,7 @@ function SessionCommentsSection({ comments }: { comments: SessionComment[] }): J
               c.primary && c.primary !== 'safe' ? JUDGMENT_LABEL_JP[c.primary] : undefined;
             return (
               <li key={`${c.time}-${i}`} className="fck-stats-comment-item">
-                <span className="fck-stats-comment-time">{formatCommentTime(c.time)}</span>
+                <span className="fck-stats-comment-time">{formatCommentTime(c.videoTime)}</span>
                 {marker && <span className="fck-stats-comment-mark">{marker}</span>}
                 <span className="fck-stats-comment-text">{c.text}</span>
               </li>

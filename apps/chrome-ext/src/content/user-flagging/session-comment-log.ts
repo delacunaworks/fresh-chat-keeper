@@ -26,8 +26,14 @@ import type { JudgmentLabel } from '@fresh-chat-keeper/judgment-engine';
 export interface SessionComment {
   /** コメント本文（フィルタ書き換え前の原文）。 */
   text: string;
-  /** 記録時刻（Unix ms）。表示は時刻順。 */
+  /** 記録順序用の Unix ms（内部・React key 用。表示には使わない）。 */
   time: number;
+  /**
+   * 動画の再生位置（秒）。記録時の `<video>.currentTime`。表示はこれを h:mm:ss で出す。
+   * アーカイブでは「配信のどの地点のコメントか」、ライブでは配信開始からの経過。
+   * 取得不能（video 無し等）なら undefined。
+   */
+  videoTime?: number;
   /**
    * FCK の判定 primary（判定済みのみ）。未判定/通常コメントは undefined。
    * 'safe' も明示的に入りうる（Stage 2 が safe と判定した等）。
@@ -54,12 +60,13 @@ let totalCount = 0;
  *
  * @param author 投稿者識別子（@ハンドル）。空なら何もしない（per-user 表示できないため）。
  * @param text   コメント本文。
- * @param opts.time 記録時刻（既定 Date.now()。テスト用に注入可）。
+ * @param opts.time 記録順序用の時刻（既定 Date.now()。テスト用に注入可）。
+ * @param opts.videoTime 動画の再生位置（秒）。表示に使う。取得不能なら省略。
  */
 export function recordSessionComment(
   author: string,
   text: string,
-  opts?: { time?: number },
+  opts?: { time?: number; videoTime?: number },
 ): void {
   if (!author) return;
   const time = opts?.time ?? Date.now();
@@ -73,7 +80,7 @@ export function recordSessionComment(
   }
   byAuthor.set(author, arr);
 
-  arr.push({ text, time });
+  arr.push({ text, time, ...(opts?.videoTime !== undefined ? { videoTime: opts.videoTime } : {}) });
   totalCount++;
 
   // per-user 上限: 最古を 1 件落とす。

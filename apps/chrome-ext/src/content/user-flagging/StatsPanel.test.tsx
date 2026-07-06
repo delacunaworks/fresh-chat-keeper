@@ -165,9 +165,20 @@ describe('StatsPanel: SessionCommentsSection（F-1）', () => {
   });
 });
 
-describe('StatsPanel: formatCommentTime', () => {
-  it('HH:MM:SS（ゼロ埋め）', () => {
-    const t = new Date('2026-07-05T09:03:07').getTime();
-    expect(formatCommentTime(t)).toBe('09:03:07');
+describe('StatsPanel: formatCommentTime（動画再生位置）', () => {
+  it('1 時間未満は m:ss', () => {
+    expect(formatCommentTime(0)).toBe('0:00');
+    expect(formatCommentTime(7)).toBe('0:07');
+    expect(formatCommentTime(3 * 60 + 7)).toBe('3:07');
+    expect(formatCommentTime(59 * 60 + 59)).toBe('59:59');
+  });
+  it('1 時間以上は h:mm:ss', () => {
+    expect(formatCommentTime(3600)).toBe('1:00:00');
+    expect(formatCommentTime(3600 + 23 * 60 + 45)).toBe('1:23:45');
+  });
+  it('取得不能（undefined / 負 / NaN）は —', () => {
+    expect(formatCommentTime(undefined)).toBe('—');
+    expect(formatCommentTime(-1)).toBe('—');
+    expect(formatCommentTime(Number.NaN)).toBe('—');
   });
 });

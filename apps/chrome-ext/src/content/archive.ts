@@ -745,7 +745,12 @@ function processMessage(el: Element, isReprocess = false): void {
   attachActionBar(el, authorChannelId, text);
   // F-1（決定4b）: 配信内コメントログに全コメントを記録（表示専用・非永続）。
   // author 未取得なら per-user 表示できないので no-op。マーカーは emitJudgmentForElement で付与。
-  if (authorChannelId) recordSessionComment(authorChannelId, text);
+  // 表示は実時間でなく動画の再生位置（video.currentTime）。audioContext とは独立に読む
+  // （F-1 は音声文脈 OFF でも再生位置を出す）。
+  if (authorChannelId) {
+    const vt = readParentVideoCurrentTime();
+    recordSessionComment(authorChannelId, text, vt !== null ? { videoTime: vt } : undefined);
+  }
   if (authorChannelId && isUserBlocked(authorChannelId)) {
     applyFilter(el, text, 'ユーザーブロック', undefined, 'user_block');
     return;

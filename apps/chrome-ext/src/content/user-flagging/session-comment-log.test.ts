@@ -41,6 +41,14 @@ describe('recordSessionComment / getSessionComments', () => {
     expect(getSessionComments('@none')).toEqual([]);
   });
 
+  it('videoTime（再生位置）を保持する。未指定なら undefined', () => {
+    recordSessionComment('@a', 'with', { time: 1, videoTime: 3661 });
+    recordSessionComment('@a', 'without', { time: 2 });
+    const a = getSessionComments('@a');
+    expect(a[0].videoTime).toBe(3661);
+    expect(a[1].videoTime).toBeUndefined();
+  });
+
   it('author 空は記録しない（no-op）', () => {
     recordSessionComment('', 'x', { time: 1 });
     expect(__test__.totalCount()).toBe(0);
