@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "build": "pnpm run build:popup && pnpm run build:content && pnpm run build:background",
+    "build": "pnpm run build:popup && pnpm run build:content && pnpm run build:background && node scripts/sync-dist-to-windows.mjs",
     "build:popup": "vite build",
     "build:content": "vite build --config vite.content.config.ts",
     "build:background": "vite build --config vite.background.config.ts",

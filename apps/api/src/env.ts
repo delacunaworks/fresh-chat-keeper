@@ -57,6 +57,15 @@ export interface Env {
    */
   ANTHROPIC_API_KEY: string;
 
+  /**
+   * アーカイブ transcript 一括取り込み（POST /v1/stream-context/transcript）の
+   * 管理者トークン（Phase 7 / AR-1）。一般ユーザーの x-fck-token とは**別物**で、
+   * 運営の CLI（AR-2 transcribe-vod）だけが `x-fck-admin-token` ヘッダで提示する。
+   * `wrangler secret put ADMIN_INGEST_TOKEN` で設定。ローカルは `.dev.vars`。
+   * 未設定なら transcript endpoint は 500（誤デプロイ検出）。
+   */
+  ADMIN_INGEST_TOKEN: string;
+
   // ─── 公開 vars ────────────────────────────────────────
   /**
    * CORS 許可 origin のカンマ区切りリスト。

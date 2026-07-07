@@ -45,6 +45,13 @@ export interface JudgeRequest {
      * 載せる。未指定なら従来どおり request 同梱の recentAudio のみで判定する。
      */
     videoId?: string;
+    /**
+     * Phase 7（AR-3）: 視聴者の再生位置（秒）。`audioContext.enabled === true` の
+     * クライアントだけが送る。proxy がこれを summary 取得に `&t=` として付け、
+     * アーカイブ transcript の「T までの累積要約 + T 直近の逐語」を引く
+     * （★T より未来は返らない）。未指定なら live rolling のみ（従来挙動）。
+     */
+    currentTimeSeconds?: number;
   };
   /**
    * ユーザーティア。Phase 2 では optional（未指定時は 'free' 扱い）。

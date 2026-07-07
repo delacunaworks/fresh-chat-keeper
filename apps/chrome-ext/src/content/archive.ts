@@ -87,20 +87,23 @@ import { initAggregator, recordAggregate } from './user-flagging/aggregator.js';
 import { applyFlagToMessage, initUiOverlay } from './user-flagging/ui-overlay.js';
 // Phase 3.5 B6: 統計詳細パネル（クリックモーダル、menu-manager onStats 経由で開く）
 import { openStatsPanel, closeCurrent as closeStatsPanel } from './user-flagging/stats-panel-entry.js';
+// F-1（決定4b）: StatsPanel の「この配信でのコメント」用セッション内バッファ（表示専用・非永続）
+import {
+  recordSessionComment,
+  markSessionComment,
+  clearSessionCommentLog,
+} from './user-flagging/session-comment-log.js';
 import {
   flushAll as flushUserStats,
   clearAllCached,
 } from '../shared/user-stats-store.js';
 import type { JudgmentLabel } from '@fresh-chat-keeper/judgment-engine';
-// Phase 5 P5-B3: 字幕 DOM 抽出プロバイダ（収集）。P5-B4c: 判定への配線。
-import { createAudioContextProvider } from './captions/factory.js';
-import { CaptionFeeder } from './captions/feeder.js';
-import { postStreamCaptions } from './collection-client.js';
-import { qualityThresholdToNumber } from './captions/quality-threshold.js';
-import {
-  captionCacheSignature,
-  type AudioContextProvider,
-} from '@fresh-chat-keeper/judgment-engine';
+// AR-3: 音声文脈は再生位置（video.currentTime）をキーに proxy がサーバ側 transcript
+// を引く方式に移行。字幕 DOM 抽出（Phase 5 の captionProvider）+ feeder（P7-FEED）は
+// 凍結し、判定経路からは撤去した（コードは captions/ に残す）。
+import { readParentVideoCurrentTime } from './captions/video-time.js';
+import { extractDisplayText, getReplayTimestampSeconds } from './comment-extract.js';
+import { captionCacheSignature } from '@fresh-chat-keeper/judgment-engine';
 
 /** YouTube チャットリプレイのメッセージコンテナ */
 const ITEMS_SELECTOR = '#items';
@@ -157,14 +160,11 @@ function shutdownOnInvalidContext(): void {
   void flushUserStats();
   // Phase 3.5 B6: 開いていれば StatsPanel を片付け（context 喪失時の DOM leak 防止）
   closeStatsPanel();
-  // Phase 7 P7-FEED: 字幕 feeder 停止（タイマー解除 + バッファ破棄）
-  captionFeeder?.stop();
-  captionFeeder = null;
-  // Phase 5 P5-B3: 字幕プロバイダ停止（observer 解除 + バッファ破棄）
-  captionProvider?.stop();
-  captionProvider = null;
-  // P5-B4c: 字幕スナップショットも nocap に戻す（context 喪失後の残留防止）
-  captionSnapshot = { captionSig: 'nocap' };
+  // F-1（決定4b ガードレール2）: 配信内コメントログを破棄（永続化なし・離脱で消える）。
+  clearSessionCommentLog();
+  // AR-3: 音声文脈スナップショットを nocap に戻す（context 喪失後の残留防止）。
+  // 字幕 provider / feeder は AR-3 で判定経路から撤去済み（凍結）。
+  audioSnapshot = { sig: 'nocap' };
 }
 
 // ─── モジュールスコープ状態 ───────────────────────────────────────────────────
@@ -183,63 +183,47 @@ const sessionTracker = new SessionTracker();
  * 未接続（注入は P5-B4b、enabled gating は P5-B4c）。配信切替時は stream-detector の
  * onStreamChange フックで reset される。
  */
-let captionProvider: AudioContextProvider | null = null;
+/**
+ * AR-3: 音声文脈の同期スナップショット。
+ *
+ * キャッシュキー（{@link buildStage2CacheKey} の signature）は processComment の
+ * **同期パス**で必要。再生位置（`video.currentTime`）は同期で読めるため、
+ * captionSignature が使っていた仕組みを流用して 30 秒バケットの sig を作り、
+ * Stage 2 バッチ送信時は同じスナップショットの `currentTimeSeconds` を proxy に送る
+ * （sig と currentTimeSeconds を同一スナップショットで揃える）。
+ *
+ * sig は 30 秒バケット粒度なので 30 秒間は安定し、再生位置が進むと変わって再判定される。
+ *
+ * **audioContext.enabled=false（既定・大多数）では常に `{ sig: 'nocap' }`**
+ * → キャッシュキーは v0.6.0 とバイト一致、currentTimeSeconds 非送信（完全後方互換）。
+ */
+let audioSnapshot: {
+  currentTimeSeconds?: number;
+  sig: string;
+} = { sig: 'nocap' };
 
 /**
- * Phase 7（P7-FEED）字幕 feeder。captionProvider と同じライフサイクルで start/stop し、
- * DOM 字幕を StreamContextDO へ定期 POST する（captionContext.enabled のときだけ）。
+ * 音声文脈スナップショットを最新化する（同期）。audioContext.enabled のときだけ
+ * parent frame の `video.currentTime` を読み、30 秒バケットの sig と currentTimeSeconds を
+ * 更新する。OFF / 再生位置取得不能なら `{ sig: 'nocap' }` にリセット。
+ *
+ * `video.currentTime` の読み取りは同期・安価なので processComment / drain から
+ * そのまま呼べる（旧 async provider 呼び出しは不要になった）。
  */
-let captionFeeder: CaptionFeeder | null = null;
-
-/**
- * Phase 5 P5-B4c: 字幕文脈の同期スナップショット。
- *
- * キャッシュキー（{@link buildStage2CacheKey} の captionSig）は processComment の
- * **同期パス**で必要だが、{@link AudioContextProvider.getRecentContext} は async。
- * そこで provider の結果を本モジュールスコープにキャッシュし、processComment は
- * `captionSig` を同期で読み、Stage 2 バッチ送信時は同じスナップショットの
- * `recentAudio` を proxy に送る（captionSig と recentAudio を同一スナップショットで
- * 揃える、B4b 完了報告 G-2/G-3）。
- *
- * captionSig はバケット（既定 30 秒）粒度なので 30 秒間は安定し、processComment と
- * バッチ送信が同一バケットを共有する（境界跨ぎは稀かつ次バケットで自己補正）。
- * provider 側で 5 秒メモ化済みなので {@link refreshCaptionSnapshot} の頻繁呼び出しは安価。
- *
- * **captionContext.enabled=false（既定・大多数）では常に `{ captionSig: 'nocap' }`**
- * → キャッシュキーは v0.5.0 とバイト一致、recentAudio 非送信（完全後方互換）。
- */
-let captionSnapshot: {
-  recentAudio?: { text: string; qualityScore: number };
-  captionSig: string;
-} = { captionSig: 'nocap' };
-
-/**
- * 字幕スナップショットを最新化する（async）。captionContext.enabled のときだけ
- * provider から直近文脈を取得し、{@link captionSnapshot} を更新する。OFF / provider
- * 無し / 品質低（getRecentContext が null）なら `{ captionSig: 'nocap' }` にリセット。
- *
- * provider の 5 秒メモ化により頻繁に呼んでも DOM 全走査は走らない。
- * processComment から fire-and-forget で（次メッセージのキー鮮度維持）、
- * drainStage2Queue から await で（送信直前の recentAudio 鮮度確保）呼ぶ。
- */
-async function refreshCaptionSnapshot(): Promise<void> {
-  if (!currentSettings?.captionContext.enabled || !captionProvider) {
-    captionSnapshot = { captionSig: 'nocap' };
+function refreshAudioSnapshot(): void {
+  if (currentSettings?.audioContext.enabled !== true) {
+    audioSnapshot = { sig: 'nocap' };
     return;
   }
-  const threshold = qualityThresholdToNumber(currentSettings.captionContext.qualityThreshold);
-  const rc = await captionProvider.getRecentContext(
-    currentSettings.captionContext.windowSeconds,
-    threshold,
-  );
-  if (rc) {
-    captionSnapshot = {
-      recentAudio: { text: rc.text, qualityScore: rc.qualityScore },
-      captionSig: captionCacheSignature(true, rc.currentTimeSeconds),
-    };
-  } else {
-    captionSnapshot = { captionSig: 'nocap' };
+  const t = readParentVideoCurrentTime();
+  if (t === null) {
+    audioSnapshot = { sig: 'nocap' };
+    return;
   }
+  audioSnapshot = {
+    currentTimeSeconds: t,
+    sig: captionCacheSignature(true, t),
+  };
 }
 
 /**
@@ -455,46 +439,20 @@ export function startArchiveMode(mode: 'archive' | 'live' = 'archive'): void {
       // 呼んで二段構えにする（後勝ち）。
       void initCollectionEmitter(settings.collectionApiUrl, anonToken);
 
-      // Phase 5 P5-B3/B4c: 字幕プロバイダを生成 + start。
-      // initStreamDetector より前に作り、配信切替フック（onStreamChange）で
-      // 字幕バッファを reset させる。収集は常に動くが、判定への注入
-      // （recentAudio 送信 + captionSig キー混入）は processComment / drain で
-      // captionContext.enabled を gating する（refreshCaptionSnapshot 参照）。
-      // enabled=false（既定）なら captionSig='nocap' + recentAudio 非送信で v0.5.0 同一。
-      captionProvider = createAudioContextProvider(
-        settings,
-        currentPageMode === 'live' ? 'live' : 'archive',
-      );
-      captionProvider.start();
-
-      // Phase 7 P7-FEED: 字幕 feeder 起動。captionProvider から定期収集し DO へ POST。
-      // gating は getEnabled() が currentSettings.captionContext.enabled をライブ参照
-      // ＝設定変更に動的追従（OFF の間は収集も送信もしない）。送信は bg-fetch 経由で
-      // x-fck-token を付ける。videoId は既存 URL 判定から取得。
-      captionFeeder = new CaptionFeeder({
-        provider: captionProvider,
-        getEnabled: () => currentSettings?.captionContext.enabled === true,
-        getWindowSeconds: () => currentSettings?.captionContext.windowSeconds ?? 90,
-        getThreshold: () =>
-          currentSettings
-            ? qualityThresholdToNumber(currentSettings.captionContext.qualityThreshold)
-            : 0.5,
-        getVideoId: () => getVideoIdFromUrl(),
-        send: (videoId, segments) =>
-          postStreamCaptions(
-            { apiUrl: currentSettings?.collectionApiUrl ?? '', token: anonToken },
-            videoId,
-            segments,
-          ),
-      });
-      captionFeeder.start();
+      // AR-3: 字幕 DOM 抽出（Phase 5 captionProvider）と feeder（P7-FEED）は凍結し
+      // 判定経路から撤去した。音声文脈は audioContext.enabled のとき、再生位置
+      // （video.currentTime）を判定リクエストに載せ、proxy がサーバ側 transcript を
+      // 引く方式に移行（refreshAudioSnapshot 参照）。OFF（既定）なら sig='nocap' +
+      // currentTimeSeconds 非送信で v0.6.0 同一。
 
       // Phase 3.5: 視聴者フラグ機能の集計パイプライン起動。enabled でも OFF でも
       // 初期化は行う（onChanged で OFF→ON 切替に追従できるように）。
       // stream-detector の polling は enabled に関わらず安全（取得した
       // streamerChannelId は recordAggregate が enabled チェックで gating）。
-      // P5-B3: 配信切替時に字幕バッファをリセット（同じフックに相乗り）。
-      initStreamDetector(sessionTracker, () => captionProvider?.reset?.());
+      // AR-3: 配信切替時に音声文脈スナップショットをリセット（再生位置が変わるため）。
+      initStreamDetector(sessionTracker, () => {
+        audioSnapshot = { sig: 'nocap' };
+      });
       initAggregator(settings, sessionTracker);
       // Phase 3.5 B5: DOM overlay 起動。CSS 即注入 + body 属性で表示モード反映。
       // 設定 onChanged の subscriber を内部で立てるので、enabled / displayStyle /
@@ -776,16 +734,40 @@ function processMessage(el: Element, isReprocess = false): void {
     showPendingElement(el);
   }
 
+  // 判定パイプライン用 text（従来どおり textContent。スタンプ <img> は含まれない）と、
+  // F-1 表示用 text（絵文字 alt 込み。スタンプのみのコメントでも空にならない）を分離。
   const text = el.textContent?.trim() ?? '';
+  const displayText = extractDisplayText(el) || text;
+
+  // ── ⋯メニュー + 配信内コメントログ（F-1）: スタンプのみのコメントにも付ける ──────
+  // （従来は text 空で早期 return していたため、スタンプのみはメニューも記録も
+  //   されなかった。ブロック/統計はスタンプ連投者にも必要なので text 空でも実施。）
+  const authorChannelId = getAuthorChannelIdFromElement(el);
+  attachActionBar(el, authorChannelId, displayText || text);
+  if (authorChannelId && displayText) {
+    // 時刻はコメント行自身のリプレイ時刻（#timestamp）を優先。DOM 出現時の
+    // currentTime と違い (a) コメント毎に正確 (b) シーク再放出でも同値＝重複排除が効く。
+    // ライブで実時刻表示が紛れる場合に備え、currentTime から ±15 分超乖離は不採用。
+    const domTs = getReplayTimestampSeconds(el);
+    const ct = readParentVideoCurrentTime();
+    let vt: number | undefined;
+    if (domTs !== null && (ct === null || Math.abs(domTs - ct) <= 900)) {
+      vt = Math.max(0, domTs);
+    } else if (ct !== null) {
+      vt = ct;
+    }
+    recordSessionComment(authorChannelId, displayText, {
+      ...(vt !== undefined ? { videoTime: vt } : {}),
+      ...(text && text !== displayText ? { matchKey: text } : {}),
+    });
+  }
+
   if (!text) return;
 
   if (revealedTexts.has(text)) return;
 
-  // ── ユーザーブロック: アクションバー紐付け + ブロック済みなら即非表示 ──────────
-  // hover アクションバーは renderer 行単位でホバー検知する。ブロック済み投稿者の
-  // 新規コメントもここで遡及非表示と同じテキスト書き換えで隠す（セッション継続）。
-  const authorChannelId = getAuthorChannelIdFromElement(el);
-  attachActionBar(el, authorChannelId, text);
+  // ── ユーザーブロック: ブロック済みなら即非表示 ──────────────────────────────
+  // ブロック済み投稿者の新規コメントもここで遡及非表示と同じテキスト書き換えで隠す。
   if (authorChannelId && isUserBlocked(authorChannelId)) {
     applyFilter(el, text, 'ユーザーブロック', undefined, 'user_block');
     return;
@@ -854,12 +836,11 @@ function processMessage(el: Element, isReprocess = false): void {
   }
 
   // ── Stage 2: キーワード単体マッチ → プロキシへ委託 ──────────────────────────
-  // P5-B4c: 字幕スナップショットを fire-and-forget で最新化（次メッセージのキー
-  // 鮮度維持。provider 5 秒メモ化で DOM 全走査は走らず安価）。本メッセージの
-  // キャッシュキーには現スナップショットの captionSig を使う。captionContext.enabled
-  // =false（既定・大多数）では captionSig は常に 'nocap' → v0.5.0 とバイト一致。
-  void refreshCaptionSnapshot();
-  const captionSig = captionSnapshot.captionSig;
+  // AR-3: 音声文脈スナップショットを同期で最新化。本メッセージのキャッシュキーには
+  // 現スナップショットの sig（30 秒バケット）を使う。audioContext.enabled=false
+  // （既定・大多数）では sig は常に 'nocap' → v0.6.0 とバイト一致。
+  refreshAudioSnapshot();
+  const audioSig = audioSnapshot.sig;
   const stage2keyword = matchesKeywordForStage2(text, currentKeywords);
   if (!stage2keyword) {
     // 指示・攻略ヒント系フレーズ（gameplay-hints の stage2_phrases）を Stage 2 へ。
@@ -880,7 +861,7 @@ function processMessage(el: Element, isReprocess = false): void {
       const hintPhrase = matchesGameplayHintForStage2(text, currentGenreTemplates);
       if (hintPhrase !== null) {
         const progress = currentSettings.progressByGame[currentSettings.gameId];
-        const cacheKey = buildStage2CacheKey(currentSettings.gameId, progress, text, captionSig);
+        const cacheKey = buildStage2CacheKey(currentSettings.gameId, progress, text, audioSig);
         const cached = getCachedVerdict(cacheKey);
         if (cached !== null) {
           applyStage2Verdict({ text, el: new WeakRef(el), cacheKey, matchedKeyword: hintPhrase }, cached);
@@ -896,7 +877,7 @@ function processMessage(el: Element, isReprocess = false): void {
     if (currentSettings.gameId === 'other' && currentGenreTemplates.length > 0) {
       const genreKeyword = matchesGenreKeywordForStage2(text, currentGenreTemplates);
       if (genreKeyword) {
-        const cacheKey = buildStage2CacheKey('other', undefined, text, captionSig);
+        const cacheKey = buildStage2CacheKey('other', undefined, text, audioSig);
         const cached = getCachedVerdict(cacheKey);
         if (cached !== null) {
           applyStage2Verdict({ text, el: new WeakRef(el), cacheKey, matchedKeyword: genreKeyword }, cached);
@@ -911,7 +892,7 @@ function processMessage(el: Element, isReprocess = false): void {
   }
 
   const progress = currentSettings.progressByGame[currentSettings.gameId];
-  const cacheKey = buildStage2CacheKey(currentSettings.gameId, progress, text, captionSig);
+  const cacheKey = buildStage2CacheKey(currentSettings.gameId, progress, text, audioSig);
 
   // キャッシュ済みなら即時適用
   const cached = getCachedVerdict(cacheKey);
@@ -983,12 +964,12 @@ async function drainStage2Queue(): Promise<void> {
       const batch = stage2Queue.splice(0, 5);
       // clearStage2Queue() との非同期レースでバッチが空になる場合があるため送信をスキップ
       if (batch.length === 0) break;
-      // P5-B4c: 送信直前に字幕スナップショットを最新化し、その recentAudio を proxy へ。
-      // captionContext.enabled=false（既定）では captionSnapshot.recentAudio は
-      // undefined のまま → context に乗らず v0.5.0 と完全同一のペイロード。
-      await refreshCaptionSnapshot();
-      // P7-B5: video_id を載せる（あれば）。proxy がこれをキーに DO の rolling
-      // summary を Service Binding で引く。取得不能（空文字）なら従来どおり。
+      // AR-3: 送信直前に音声文脈スナップショットを最新化し、その currentTimeSeconds を
+      // proxy へ。audioContext.enabled=false（既定）では currentTimeSeconds は undefined
+      // のまま → context に乗らず v0.6.0 と完全同一のペイロード。
+      refreshAudioSnapshot();
+      // P7-B5: video_id を載せる（あれば）。proxy がこれをキーに DO の rolling summary /
+      // transcript を Service Binding で引く。取得不能（空文字）なら従来どおり。
       const videoIdForJudge = getVideoIdFromUrl();
       const success = await sendStage2Batch(
         batch,
@@ -996,8 +977,8 @@ async function drainStage2Queue(): Promise<void> {
         anonToken,
         applyStage2Verdict,
         currentVideoTitle,
-        captionSnapshot.recentAudio,
         videoIdForJudge || undefined,
+        audioSnapshot.currentTimeSeconds,
       );
       if (success) await incrementStage2Usage(batch.length);
 
@@ -1038,6 +1019,13 @@ function emitJudgmentForElement(
   const videoId = getVideoIdFromUrl();
   const channelId = getChannelIdFromDom();
   const targetAuthorChannelId = getAuthorChannelIdFromElement(el);
+
+  // F-1（決定4b）: 配信内コメントログに FCK 判定マーカーを付与（collection emit の
+  // 可否とは独立。videoId/channelId 欠落で下の guard で return しても mark は済ませる）。
+  // CollectionLabel と JudgmentLabel はメンバー集合が同一（recordAggregate と同じキャスト）。
+  if (targetAuthorChannelId) {
+    markSessionComment(targetAuthorChannelId, text, judgment.primaryLabel as JudgmentLabel);
+  }
 
   // 必須フィールドが欠けている場合は emit を諦める（apps/api の 422 を避ける）。
   // サイレント失敗を避けるため、欠けたフィールドを warn で 1 度だけ通知する

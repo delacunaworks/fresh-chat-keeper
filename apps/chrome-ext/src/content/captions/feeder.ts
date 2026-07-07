@@ -25,6 +25,15 @@ import type { AudioContextProvider } from '@fresh-chat-keeper/judgment-engine';
 import type { BackgroundFetchResponse } from '@fresh-chat-keeper/shared';
 import type { StreamCaptionSegment } from '../collection-client.js';
 
+// ─── 凍結フラグ（AR-3 / P7-FEED 凍結）─────────────────────────────
+/**
+ * **字幕 feeder は凍結中（false）**。AR-3 で字幕連動を停止し、音声文脈は運営が
+ * サーバに用意する transcript（AR-1/AR-2）へ移行したため、DOM 字幕の DO 送信は
+ * 不要になった。start() はこのフラグが false の間 no-op で起動しない。
+ * **コードは削除しない**（将来ライブ RT 転写で collect/flush 配管を再利用する）。
+ */
+export const CAPTION_FEEDER_ENABLED = false;
+
 // ─── チューニング定数 ───────────────────────────────────────────
 
 /** 字幕を 1 件収集する間隔（ms）。 */
@@ -77,8 +86,10 @@ export class CaptionFeeder {
     this.deps = { now: () => Date.now(), ...deps };
   }
 
-  /** collect / flush タイマーを開始する（多重起動は無視）。 */
+  /** collect / flush タイマーを開始する（多重起動は無視）。凍結中は起動しない。 */
   start(): void {
+    // AR-3: 字幕 feeder は凍結。フラグが false の間は起動不能（no-op）。
+    if (!CAPTION_FEEDER_ENABLED) return;
     if (this.collectTimer !== null || this.flushTimer !== null) return;
     this.collectTimer = setInterval(() => void this.collectOnce(), COLLECT_INTERVAL_MS);
     this.flushTimer = setInterval(() => void this.flushOnce(), FLUSH_INTERVAL_MS);

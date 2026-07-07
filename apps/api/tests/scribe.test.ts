@@ -106,6 +106,53 @@ describe('transcribe — 成功', () => {
 
     expect(res).toEqual({ ok: true, text: '' });
   });
+
+  it('words が無いレスポンスは words キーを付けない（後方互換）', async () => {
+    const fetchImpl = okFetch({ text: 'やあ' });
+    const res = await transcribe(sampleAudio(), { apiKey: DUMMY_KEY, fetchImpl });
+    expect(res).toEqual({ ok: true, text: 'やあ' });
+    if (res.ok) expect('words' in res).toBe(false);
+  });
+
+  it('words 付きレスポンス（AR-2）はタイムスタンプを保持して返す', async () => {
+    const fetchImpl = okFetch({
+      text: 'こんにちは 世界',
+      words: [
+        { text: 'こんにちは', start: 0.1, end: 0.6, type: 'word' },
+        { text: ' ', start: 0.6, end: 0.65, type: 'spacing' },
+        { text: '世界', start: 0.65, end: 1.0, type: 'word', speaker_id: 'speaker_0' },
+      ],
+    });
+    const res = await transcribe(sampleAudio(), { apiKey: DUMMY_KEY, fetchImpl });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.words).toHaveLength(3);
+      expect(res.words![0]).toEqual({ text: 'こんにちは', start: 0.1, end: 0.6, type: 'word' });
+      expect(res.words![2].speaker_id).toBe('speaker_0');
+    }
+  });
+});
+
+describe('parseWords（AR-2）', () => {
+  const { parseWords } = __test__;
+
+  it('start/end が数値でない要素は捨てる', () => {
+    const words = parseWords([
+      { text: 'ok', start: 1, end: 2 },
+      { text: 'bad', start: 'x', end: 2 },
+      { text: 'noend', start: 3 },
+      { start: 4, end: 5 }, // text 欠落
+      null,
+      'nope',
+    ]);
+    expect(words).toHaveLength(1);
+    expect(words[0].text).toBe('ok');
+  });
+
+  it('配列でなければ空配列', () => {
+    expect(parseWords(undefined)).toEqual([]);
+    expect(parseWords({})).toEqual([]);
+  });
 });
 
 describe('transcribe — 失敗を握り潰さない', () => {

@@ -1,0 +1,4 @@
+# 転写作業ディレクトリ（音声・チャンク・転写キャッシュ）。コミットしない。
+.transcribe-work/
+# .env は root .gitignore でも無視されるが念のため。
+.env

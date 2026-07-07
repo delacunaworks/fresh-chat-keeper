@@ -12,11 +12,20 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { StatsPanel, __test__ as panelTest } from './StatsPanel.js';
 import { SessionTracker } from './session-tracker.js';
+import type { SessionComment } from './session-comment-log.js';
 
-const { flagLevelBadge, formatObservationRange, SCOPE_LABEL, CATEGORY_LABELS } = panelTest;
+const {
+  flagLevelBadge,
+  formatObservationRange,
+  SCOPE_LABEL,
+  CATEGORY_LABELS,
+  SessionCommentsSection,
+  formatCommentTime,
+} = panelTest;
 
 describe('StatsPanel: 純関数', () => {
   it('flagLevelBadge: 各 level に対応するテキストとクラス', () => {
@@ -107,5 +116,69 @@ describe('StatsPanel: 初期 markup（loading 状態）', () => {
     expect(html).toContain('role="presentation"');
     expect(html).toContain('class="fck-stats-overlay"');
     expect(html).toContain('class="fck-stats-panel"');
+  });
+});
+
+describe('StatsPanel: SessionCommentsSection（F-1）', () => {
+  const renderSection = (comments: SessionComment[]): string =>
+    renderToStaticMarkup(createElement(SessionCommentsSection, { comments }));
+
+  it('ヘッダ・注記（端末内/非永続/最大 N 件）を表示する', () => {
+    const html = renderSection([]);
+    expect(html).toContain('この配信でのコメント');
+    expect(html).toContain('この配信内のみ');
+    expect(html).toContain('保存されません');
+    expect(html).toContain('最大 100 件');
+  });
+
+  it('コメントゼロなら空メッセージ', () => {
+    expect(renderSection([])).toContain('この配信でのコメントはまだありません');
+  });
+
+  it('コメントを時刻・本文つきで全表示する（通常コメントも）', () => {
+    const html = renderSection([
+      { text: '普通のコメント', time: new Date('2026-07-05T12:00:05').getTime() },
+      { text: 'safe 判定済み', time: new Date('2026-07-05T12:00:10').getTime(), primary: 'safe' },
+    ]);
+    expect(html).toContain('普通のコメント');
+    expect(html).toContain('safe 判定済み');
+    // safe はマーカーを付けない（FCK がフィルタ/フラグしていない意）。
+    expect(html).not.toContain('fck-stats-comment-mark');
+  });
+
+  it('FCK 判定（非 safe）にはカテゴリ badge を併記する', () => {
+    const html = renderSection([
+      { text: '一強ですやん', time: 1, primary: 'harassment' },
+      { text: '次のボスは炎属性', time: 2, primary: 'spoiler' },
+    ]);
+    expect(html).toContain('fck-stats-comment-mark');
+    expect(html).toContain('暴言');
+    expect(html).toContain('ネタバレ');
+  });
+
+  it('エクスポート/コピー UI を持たない（ガードレール3・表示のみ）', () => {
+    const html = renderSection([{ text: 'x', time: 1 }]);
+    expect(html.toLowerCase()).not.toContain('copy');
+    expect(html).not.toContain('コピー');
+    expect(html).not.toContain('エクスポート');
+    expect(html).not.toContain('<button');
+  });
+});
+
+describe('StatsPanel: formatCommentTime（動画再生位置）', () => {
+  it('1 時間未満は m:ss', () => {
+    expect(formatCommentTime(0)).toBe('0:00');
+    expect(formatCommentTime(7)).toBe('0:07');
+    expect(formatCommentTime(3 * 60 + 7)).toBe('3:07');
+    expect(formatCommentTime(59 * 60 + 59)).toBe('59:59');
+  });
+  it('1 時間以上は h:mm:ss', () => {
+    expect(formatCommentTime(3600)).toBe('1:00:00');
+    expect(formatCommentTime(3600 + 23 * 60 + 45)).toBe('1:23:45');
+  });
+  it('取得不能（undefined / 負 / NaN）は —', () => {
+    expect(formatCommentTime(undefined)).toBe('—');
+    expect(formatCommentTime(-1)).toBe('—');
+    expect(formatCommentTime(Number.NaN)).toBe('—');
   });
 });

@@ -20,7 +20,14 @@ const { enrichWithStreamSummary } = __test__;
 function makeNormalized(opts: {
   videoId?: string;
   recentAudio?: { text: string; qualityScore: number };
-}): { context: JudgmentContext; videoId?: string; messages: unknown[]; tier: string } {
+  currentTimeSeconds?: number;
+}): {
+  context: JudgmentContext;
+  videoId?: string;
+  currentTimeSeconds?: number;
+  messages: unknown[];
+  tier: string;
+} {
   const context: JudgmentContext = {
     settings: {
       version: 3,
@@ -38,6 +45,9 @@ function makeNormalized(opts: {
     tier: 'free',
     context,
     ...(opts.videoId ? { videoId: opts.videoId } : {}),
+    ...(opts.currentTimeSeconds !== undefined
+      ? { currentTimeSeconds: opts.currentTimeSeconds }
+      : {}),
   };
 }
 
@@ -57,6 +67,38 @@ function mockEnv(behavior: { json?: unknown; status?: number; throws?: boolean }
     API: { fetch: fetchFn },
   } as never;
 }
+
+describe('enrichWithStreamSummary — currentTimeSeconds → &t=（AR-3）', () => {
+  function fetchUrl(env: unknown): string {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (env as any).API.fetch.mock.calls[0][0] as string;
+  }
+
+  it('currentTimeSeconds あり → summary GET に &t= が付く', async () => {
+    const normalized = makeNormalized({ videoId: 'vid1', currentTimeSeconds: 3600 });
+    const env = mockEnv({ json: { verbatim: 'x' } });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await enrichWithStreamSummary(normalized as any, env);
+    expect(fetchUrl(env)).toContain('videoId=vid1');
+    expect(fetchUrl(env)).toContain('&t=3600');
+  });
+
+  it('currentTimeSeconds=0（冒頭）も &t=0 が付く', async () => {
+    const normalized = makeNormalized({ videoId: 'vid1', currentTimeSeconds: 0 });
+    const env = mockEnv({ json: {} });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await enrichWithStreamSummary(normalized as any, env);
+    expect(fetchUrl(env)).toContain('&t=0');
+  });
+
+  it('currentTimeSeconds なし → &t= が付かない（従来 live rolling）', async () => {
+    const normalized = makeNormalized({ videoId: 'vid1' });
+    const env = mockEnv({ json: {} });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await enrichWithStreamSummary(normalized as any, env);
+    expect(fetchUrl(env)).not.toContain('&t=');
+  });
+});
 
 describe('enrichWithStreamSummary (P7-B5)', () => {
   it('(a) DO 要約あり → whole/recent/verbatim を context に反映', async () => {

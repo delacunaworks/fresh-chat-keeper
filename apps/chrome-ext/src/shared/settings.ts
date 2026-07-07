@@ -76,6 +76,19 @@ export interface CaptionContextSettings {
 }
 
 /**
+ * Phase 7（AR-3）音声文脈の設定。字幕連動（{@link CaptionContextSettings}）を
+ * 置換する **実験的** 機能。既定 OFF（オプトイン）。
+ *
+ * ON のとき、判定リクエストに再生位置（currentTimeSeconds）を載せ、proxy が
+ * サーバ側の transcript（運営が用意した文字起こし）から「再生位置までの文脈」を
+ * 引いて判定に反映する。★再生位置より先の内容は参照されない。
+ * 字幕 DOM 抽出（Phase 5）とは別系統で、この設定は enabled のみを持つ。
+ */
+export interface AudioContextSettings {
+  enabled: boolean;
+}
+
+/**
  * Phase 3（v0.4.0 / P3-UI-04）で追加された新カテゴリ設定。
  *
  * spoiler は従来どおり「基本」タブの {@link Settings.filterMode} +
@@ -161,12 +174,14 @@ export interface Settings {
    */
   userFlagging: UserFlaggingSettings;
   /**
-   * Phase 5 字幕連動の設定（v0.6.0 / caption MVP）。非 optional。
-   * {@link DEFAULT_SETTINGS}.captionContext が常時セットされ、settings-loader が
-   * 読み出し時に必ず DEFAULT とマージする（旧 v4 以前データに無くても補完される）。
-   * `userFlagging` と同型パターン。既定 OFF（オプトイン）。
+   * Phase 7 音声文脈の設定（AR-3、v0.7.0）。非 optional。
+   * {@link DEFAULT_SETTINGS}.audioContext が常時セットされ、settings-loader が
+   * 読み出し時に必ず DEFAULT とマージする。既定 OFF（オプトイン・実験的）。
+   *
+   * ※ v0.6.0 の `captionContext`（字幕連動）を置換。移行は v5→v6 migration で行い、
+   * 旧値は引き継がず一律 OFF で開始する（字幕とは別機能のため）。
    */
-  captionContext: CaptionContextSettings;
+  audioContext: AudioContextSettings;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -201,12 +216,10 @@ export const DEFAULT_SETTINGS: Settings = {
     displayStyle: 'icon',
     sensitivity: { yellow: 0.2, red: 0.4 },
   },
-  // Phase 5 / v0.6.0: 字幕連動はオプトイン（既定 OFF）。enabled が true の
-  // ときのみ字幕を判定コンテキストに乗せる（P5-B4c）。
-  captionContext: {
+  // Phase 7 / AR-3: 音声文脈はオプトイン（既定 OFF・実験的）。enabled が true の
+  // ときのみ再生位置を判定リクエストに載せ、サーバ側 transcript の文脈を反映する。
+  audioContext: {
     enabled: false,
-    windowSeconds: 60,
-    qualityThreshold: 'standard',
   },
 };
 
