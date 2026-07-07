@@ -102,6 +102,7 @@ import type { JudgmentLabel } from '@fresh-chat-keeper/judgment-engine';
 // を引く方式に移行。字幕 DOM 抽出（Phase 5 の captionProvider）+ feeder（P7-FEED）は
 // 凍結し、判定経路からは撤去した（コードは captions/ に残す）。
 import { readParentVideoCurrentTime } from './captions/video-time.js';
+import { extractDisplayText, getReplayTimestampSeconds } from './comment-extract.js';
 import { captionCacheSignature } from '@fresh-chat-keeper/judgment-engine';
 
 /** YouTube チャットリプレイのメッセージコンテナ */
@@ -733,24 +734,40 @@ function processMessage(el: Element, isReprocess = false): void {
     showPendingElement(el);
   }
 
+  // 判定パイプライン用 text（従来どおり textContent。スタンプ <img> は含まれない）と、
+  // F-1 表示用 text（絵文字 alt 込み。スタンプのみのコメントでも空にならない）を分離。
   const text = el.textContent?.trim() ?? '';
+  const displayText = extractDisplayText(el) || text;
+
+  // ── ⋯メニュー + 配信内コメントログ（F-1）: スタンプのみのコメントにも付ける ──────
+  // （従来は text 空で早期 return していたため、スタンプのみはメニューも記録も
+  //   されなかった。ブロック/統計はスタンプ連投者にも必要なので text 空でも実施。）
+  const authorChannelId = getAuthorChannelIdFromElement(el);
+  attachActionBar(el, authorChannelId, displayText || text);
+  if (authorChannelId && displayText) {
+    // 時刻はコメント行自身のリプレイ時刻（#timestamp）を優先。DOM 出現時の
+    // currentTime と違い (a) コメント毎に正確 (b) シーク再放出でも同値＝重複排除が効く。
+    // ライブで実時刻表示が紛れる場合に備え、currentTime から ±15 分超乖離は不採用。
+    const domTs = getReplayTimestampSeconds(el);
+    const ct = readParentVideoCurrentTime();
+    let vt: number | undefined;
+    if (domTs !== null && (ct === null || Math.abs(domTs - ct) <= 900)) {
+      vt = Math.max(0, domTs);
+    } else if (ct !== null) {
+      vt = ct;
+    }
+    recordSessionComment(authorChannelId, displayText, {
+      ...(vt !== undefined ? { videoTime: vt } : {}),
+      ...(text && text !== displayText ? { matchKey: text } : {}),
+    });
+  }
+
   if (!text) return;
 
   if (revealedTexts.has(text)) return;
 
-  // ── ユーザーブロック: アクションバー紐付け + ブロック済みなら即非表示 ──────────
-  // hover アクションバーは renderer 行単位でホバー検知する。ブロック済み投稿者の
-  // 新規コメントもここで遡及非表示と同じテキスト書き換えで隠す（セッション継続）。
-  const authorChannelId = getAuthorChannelIdFromElement(el);
-  attachActionBar(el, authorChannelId, text);
-  // F-1（決定4b）: 配信内コメントログに全コメントを記録（表示専用・非永続）。
-  // author 未取得なら per-user 表示できないので no-op。マーカーは emitJudgmentForElement で付与。
-  // 表示は実時間でなく動画の再生位置（video.currentTime）。audioContext とは独立に読む
-  // （F-1 は音声文脈 OFF でも再生位置を出す）。
-  if (authorChannelId) {
-    const vt = readParentVideoCurrentTime();
-    recordSessionComment(authorChannelId, text, vt !== null ? { videoTime: vt } : undefined);
-  }
+  // ── ユーザーブロック: ブロック済みなら即非表示 ──────────────────────────────
+  // ブロック済み投稿者の新規コメントもここで遡及非表示と同じテキスト書き換えで隠す。
   if (authorChannelId && isUserBlocked(authorChannelId)) {
     applyFilter(el, text, 'ユーザーブロック', undefined, 'user_block');
     return;

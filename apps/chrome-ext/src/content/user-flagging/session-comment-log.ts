@@ -29,11 +29,16 @@ export interface SessionComment {
   /** 記録順序用の Unix ms（内部・React key 用。表示には使わない）。 */
   time: number;
   /**
-   * 動画の再生位置（秒）。記録時の `<video>.currentTime`。表示はこれを h:mm:ss で出す。
-   * アーカイブでは「配信のどの地点のコメントか」、ライブでは配信開始からの経過。
+   * 動画の再生位置（秒）。コメント行の `#timestamp`（リプレイ時刻）優先、
+   * 取れなければ記録時の `<video>.currentTime`。表示はこれを h:mm:ss で出す。
    * 取得不能（video 無し等）なら undefined。
    */
   videoTime?: number;
+  /**
+   * 判定パイプライン側の text（`textContent` ベース・絵文字なし）。表示用 text と
+   * 異なる場合のみ格納し、{@link markSessionComment} の照合キーに使う。
+   */
+  matchKey?: string;
   /**
    * FCK の判定 primary（判定済みのみ）。未判定/通常コメントは undefined。
    * 'safe' も明示的に入りうる（Stage 2 が safe と判定した等）。
@@ -45,6 +50,10 @@ export interface SessionComment {
 export const PER_USER_MAX = 100;
 /** 全体の保持上限（メモリ境界）。超過時は最古アクティブ author を evict。 */
 export const TOTAL_MAX = 30_000;
+/** 重複排除で遡って比較する末尾件数（シーク再放出は直近に固まる）。 */
+const DEDUPE_SCAN_WINDOW = 30;
+/** videoTime が取れない場合の重複排除ウィンドウ（実時間 ms）。 */
+const DEDUPE_WALLCLOCK_MS = 10_000;
 
 /**
  * author（@ハンドル）→ 時刻順コメント配列。
@@ -59,17 +68,19 @@ let totalCount = 0;
  * コメントを記録する（O(1) push + 上限時 eviction）。
  *
  * @param author 投稿者識別子（@ハンドル）。空なら何もしない（per-user 表示できないため）。
- * @param text   コメント本文。
+ * @param text   コメント本文（表示用。絵文字 alt 込み）。
  * @param opts.time 記録順序用の時刻（既定 Date.now()。テスト用に注入可）。
- * @param opts.videoTime 動画の再生位置（秒）。表示に使う。取得不能なら省略。
+ * @param opts.videoTime 動画の再生位置（秒）。表示・重複排除に使う。取得不能なら省略。
+ * @param opts.matchKey 判定パイプライン側 text（表示用と異なる場合のみ）。
  */
 export function recordSessionComment(
   author: string,
   text: string,
-  opts?: { time?: number; videoTime?: number },
+  opts?: { time?: number; videoTime?: number; matchKey?: string },
 ): void {
   if (!author) return;
   const time = opts?.time ?? Date.now();
+  const videoTime = opts?.videoTime;
 
   // author を Map 末尾へ移動（LRU 更新）。
   let arr = byAuthor.get(author);
@@ -80,7 +91,29 @@ export function recordSessionComment(
   }
   byAuthor.set(author, arr);
 
-  arr.push({ text, time, ...(opts?.videoTime !== undefined ? { videoTime: opts.videoTime } : {}) });
+  // ── 重複排除: チャットリプレイはシーク巻き戻しで同じコメント行を DOM に再放出する
+  // ため、Observer が新規と誤認して二重記録される。リプレイ時刻（videoTime）は再放出
+  // でも同じ値なので「同一内容 + ほぼ同一 videoTime」を重複とみなして落とす。
+  // 正当な連投コピペ（別時刻の同文スパム）は時刻が違うので残る。
+  const newKey = opts?.matchKey ?? text;
+  const scanFrom = Math.max(0, arr.length - DEDUPE_SCAN_WINDOW);
+  for (let i = arr.length - 1; i >= scanFrom; i--) {
+    const e = arr[i];
+    const eKey = e.matchKey ?? e.text;
+    if (eKey !== newKey && e.text !== text) continue;
+    if (videoTime !== undefined && e.videoTime !== undefined) {
+      if (Math.abs(e.videoTime - videoTime) < 1) return; // 同一リプレイ時刻 → 重複
+    } else if (videoTime === undefined && e.videoTime === undefined) {
+      if (time - e.time < DEDUPE_WALLCLOCK_MS) return; // fallback: 直近の実時間ウィンドウ
+    }
+  }
+
+  arr.push({
+    text,
+    time,
+    ...(videoTime !== undefined ? { videoTime } : {}),
+    ...(opts?.matchKey !== undefined && opts.matchKey !== text ? { matchKey: opts.matchKey } : {}),
+  });
   totalCount++;
 
   // per-user 上限: 最古を 1 件落とす。
@@ -116,7 +149,8 @@ export function markSessionComment(author: string, text: string, primary: Judgme
   if (!arr) return;
   let latestMatch = -1;
   for (let i = arr.length - 1; i >= 0; i--) {
-    if (arr[i].text !== text) continue;
+    // 判定パイプラインは絵文字なし text で呼ぶため、matchKey（あれば）でも照合する。
+    if (arr[i].text !== text && arr[i].matchKey !== text) continue;
     if (arr[i].primary === undefined) {
       arr[i].primary = primary;
       return;
@@ -128,13 +162,24 @@ export function markSessionComment(author: string, text: string, primary: Judgme
 }
 
 /**
- * 指定 author の配信内コメントを時刻順（古い→新しい）で返す（コピー）。
+ * 指定 author の配信内コメントを **再生位置順**（videoTime 昇順、無いものは末尾・
+ * 記録順維持）で返す（コピー）。シークで記録順が前後しても配信の時系列で表示する。
  * StatsPanel open 時のみ呼ばれる低頻度パス。
  */
 export function getSessionComments(author: string): SessionComment[] {
   const arr = byAuthor.get(author);
   if (!arr) return [];
-  return arr.map((c) => ({ ...c }));
+  return arr
+    .map((c, i) => ({ c, i }))
+    .sort((a, b) => {
+      const av = a.c.videoTime;
+      const bv = b.c.videoTime;
+      if (av !== undefined && bv !== undefined && av !== bv) return av - bv;
+      if (av === undefined && bv !== undefined) return 1;
+      if (av !== undefined && bv === undefined) return -1;
+      return a.i - b.i; // 安定: 記録順
+    })
+    .map(({ c }) => ({ ...c }));
 }
 
 /**

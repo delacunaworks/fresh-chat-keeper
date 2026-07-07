@@ -49,6 +49,50 @@ describe('recordSessionComment / getSessionComments', () => {
     expect(a[1].videoTime).toBeUndefined();
   });
 
+  it('シーク再放出の重複排除: 同一 text + ほぼ同一 videoTime は記録しない', () => {
+    recordSessionComment('@a', '弾無いなった...', { time: 1000, videoTime: 7023 });
+    recordSessionComment('@a', '弾無いなった...', { time: 60_000, videoTime: 7023 }); // 巻き戻し再放出
+    recordSessionComment('@a', '弾無いなった...', { time: 61_000, videoTime: 7023.4 }); // 秒未満ズレ
+    expect(getSessionComments('@a')).toHaveLength(1);
+  });
+
+  it('正当な連投コピペ（別 videoTime の同文）は残る', () => {
+    recordSessionComment('@a', '草', { time: 1, videoTime: 100 });
+    recordSessionComment('@a', '草', { time: 2, videoTime: 160 });
+    recordSessionComment('@a', '草', { time: 3, videoTime: 220 });
+    expect(getSessionComments('@a')).toHaveLength(3);
+  });
+
+  it('videoTime 無し同士は実時間ウィンドウ（10s）で重複排除', () => {
+    recordSessionComment('@a', 'x', { time: 1000 });
+    recordSessionComment('@a', 'x', { time: 5000 }); // 10s 以内 → 重複
+    recordSessionComment('@a', 'x', { time: 20_000 }); // 10s 超 → 残る
+    expect(getSessionComments('@a')).toHaveLength(2);
+  });
+
+  it('matchKey（パイプライン text）でも重複排除・マーカー照合できる', () => {
+    // 表示 text は絵文字込み、matchKey は textContent ベース
+    recordSessionComment('@a', 'すごい:_スバル草草の草:', { time: 1, videoTime: 50, matchKey: 'すごい' });
+    recordSessionComment('@a', 'すごい:_スバル草草の草:', { time: 2, videoTime: 50, matchKey: 'すごい' });
+    const a = getSessionComments('@a');
+    expect(a).toHaveLength(1);
+    // 判定パイプラインは絵文字なし text で mark を呼ぶ
+    markSessionComment('@a', 'すごい', 'spoiler');
+    expect(getSessionComments('@a')[0].primary).toBe('spoiler');
+  });
+
+  it('表示は videoTime 昇順（無いものは末尾・記録順）', () => {
+    recordSessionComment('@a', 'late-recorded-early-time', { time: 3000, videoTime: 100 });
+    recordSessionComment('@a', 'no-vt-1', { time: 1000 });
+    recordSessionComment('@a', 'early-recorded-late-time', { time: 2000, videoTime: 500 });
+    const a = getSessionComments('@a');
+    expect(a.map((c) => c.text)).toEqual([
+      'late-recorded-early-time',
+      'early-recorded-late-time',
+      'no-vt-1',
+    ]);
+  });
+
   it('author 空は記録しない（no-op）', () => {
     recordSessionComment('', 'x', { time: 1 });
     expect(__test__.totalCount()).toBe(0);
@@ -97,18 +141,19 @@ describe('全体上限（TOTAL_MAX）', () => {
 
 describe('markSessionComment', () => {
   it('同一 text の最新未マークに primary を付与', () => {
-    recordSessionComment('@a', 'dup', { time: 1 });
-    recordSessionComment('@a', 'dup', { time: 2 });
+    // 正当な連投（重複排除に落ちないよう videoTime を離す）
+    recordSessionComment('@a', 'dup', { time: 1, videoTime: 100 });
+    recordSessionComment('@a', 'dup', { time: 2, videoTime: 200 });
     markSessionComment('@a', 'dup', 'harassment');
     const a = getSessionComments('@a');
-    // 最新（time=2）が付与され、古い方は未マークのまま。
+    // 最新（videoTime=200）が付与され、古い方は未マークのまま。
     expect(a[0].primary).toBeUndefined();
     expect(a[1].primary).toBe('harassment');
   });
 
   it('2 回目の mark はもう一方（古い未マーク）に付与される', () => {
-    recordSessionComment('@a', 'dup', { time: 1 });
-    recordSessionComment('@a', 'dup', { time: 2 });
+    recordSessionComment('@a', 'dup', { time: 1, videoTime: 100 });
+    recordSessionComment('@a', 'dup', { time: 2, videoTime: 200 });
     markSessionComment('@a', 'dup', 'spoiler');
     markSessionComment('@a', 'dup', 'backseat');
     const a = getSessionComments('@a');
