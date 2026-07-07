@@ -1,7 +1,7 @@
 # プライバシーポリシー / Privacy Policy
 
 **Fresh Chat Keeper Chrome Extension**
-最終更新 / Last updated: 2026-06-06
+最終更新 / Last updated: 2026-07-06
 
 ---
 
@@ -81,23 +81,39 @@ Fresh Chat Keeper は個人を特定できる情報を一切収集しません�
 - 「フラグ視聴者」タブからいつでも全データを削除できます。
 - 機能を無効化すると以降の集計は停止します。
 
-### 字幕連動について（v0.6.0 以降）
+**「この配信でのコメント」一覧について（v0.9.0 以降）:**
+- 統計詳細パネルには、対象視聴者の**現在視聴中の配信内のコメント**を時刻順に一覧
+  表示する機能があります（コメント単体では分かりにくい煽り・揶揄のパターンや、
+  逆に無実であることを確認するため）。
+- この一覧は**ブラウザのメモリ内にのみ一時保持され、`chrome.storage` にも外部
+  サーバーにも保存されません**。**配信ページを離れる・別の動画に切り替えると破棄
+  されます**（データ収集には該当しません）。
+- **現在の配信の範囲のみ**を対象とし、他の配信をまたいだ蓄積・閲覧はできません。
 
-YouTube の字幕（CC）が表示されている配信で、配信者の直近の発言を AI 判定の
-文脈に加え、ネタバレ等の判定を補助する「字幕連動」機能を提供しています
-（実験的機能）。
+### 音声文脈について（v0.9.0 以降）
+
+運営が文字起こしを用意したアーカイブ動画で、配信の進行文脈（その再生位置までの
+要約と直近の発言）を AI 判定の文脈に加え、ネタバレ等の判定を補助する「音声文脈」
+機能を提供しています（実験的機能）。**v0.6.0 の「字幕連動」機能は廃止し、本機能に
+置き換えました**（旧「字幕連動」に関する開示は本項に置き換わります）。
 
 **重要な特性:**
-- **デフォルトは OFF（オプトイン）** です。ポップアップの「字幕連動」タブで
-  明示的に有効化した場合のみ動作します。OFF のときは字幕を一切取得・送信せず、
-  v0.5.0 と完全に同一の挙動です。
-- ON のとき、表示されている字幕テキスト（直近 N 秒分。効果音注釈 `[..]` や
-  YouTube の設定 UI 文字列は除去済み）を、コメントと同じ判定リクエストに
-  含めて Claude へ送信します（判定用途のみ）。
-- 字幕は YouTube ページの DOM（表示中の字幕要素）から取得します。
-  **音声の録音・取得は行いません。**
-- プロキシは字幕テキストをログ保存しません（判定処理後に破棄されます）。
-- OFF にすれば、字幕テキストは一切送信されません。
+- **デフォルトは OFF（オプトイン）** です。ポップアップの「音声文脈」タブで
+  明示的に有効化した場合のみ動作します。OFF のときは以下の送信を一切行わず、
+  v0.6.0（音声文脈 OFF）と同一の挙動です。
+- **文字起こしは運営側が行います。** 対象動画の音声は**運営が**文字起こし
+  サービス ElevenLabs（米国）に送信してテキスト化します。**視聴者の端末から
+  音声・字幕を送信することはありません**（拡張機能が音声を録音・取得することも
+  ありません）。
+- 文字起こしとその要約は**動画単位で運営のサーバー（Cloudflare）に保存**され
+  ます。これは配信（動画）ごとの文脈であり、**視聴者個人とは紐づきません**。
+- **機能を ON にしたとき**、拡張機能は判定リクエストに **動画 ID と現在の再生
+  位置（秒）** を含めて送信します（サーバー側でその再生位置までの文脈を引くため）。
+  **OFF（既定）のときは送りません。** 再生位置より先の内容は参照されません。
+- 判定リクエストに含まれる動画 ID・再生位置はプロキシでログ保存されません
+  （判定処理後に破棄されます）。
+- 進行文脈の**要約生成には Anthropic Claude** を使用します（従来のコメント判定
+  と同じ提供者です）。
 
 ### opt-in 同意に基づくデータ収集（v0.3.5 以降）
 
@@ -242,23 +258,45 @@ decisions.
 - You can delete all data at any time from the "Flagged viewers" tab.
 - Disabling the feature stops further aggregation.
 
-### Caption Context Feature (v0.6.0 and later)
+**About the "Comments in this stream" list (v0.9.0 and later):**
+- The stats detail panel can show a time-ordered list of a viewer's comments
+  **within the stream you are currently watching** (to reveal patterns of taunting
+  that aren't obvious from a single comment, or conversely to confirm innocence).
+- This list is held **only in browser memory and is never saved to
+  `chrome.storage` or to any external server**. It is **discarded when you leave
+  the stream page or switch to another video** (it does not constitute data
+  collection).
+- It is scoped to **the current stream only**; there is no cross-stream
+  accumulation or browsing.
 
-On streams where YouTube captions (CC) are displayed, a "caption context" feature
-adds the streamer's recent speech to the AI's judgment context to assist with
-spoiler and other detection (an experimental feature).
+### Audio Context Feature (v0.9.0 and later)
+
+On archived videos for which we have prepared a transcript, an "audio context"
+feature adds the stream's progression context (a summary up to your current
+playback position, plus the most recent remarks) to the AI's judgment context to
+assist with spoiler and other detection (an experimental feature). **The v0.6.0
+"caption context" feature has been retired and replaced by this feature** (the
+former caption-context disclosure is superseded by this section).
 
 **Key characteristics:**
 - **Disabled by default (opt-in).** It works only when you explicitly enable it
-  in the "Caption context" tab of the popup. While OFF, no caption text is read
-  or sent, and behavior is exactly identical to v0.5.0.
-- While ON, the displayed caption text (the last N seconds; sound-effect
-  annotations `[..]` and YouTube settings-UI strings are stripped) is included in
-  the same judgment request as the comment and sent to Claude (for judgment only).
-- Captions are read from the YouTube page DOM (the displayed caption elements).
-  **No audio is recorded or captured.**
-- The proxy does not log caption text (it is discarded after processing).
-- If you turn it OFF, no caption text is sent at all.
+  in the "Audio context" tab of the popup. While OFF, none of the transmissions
+  below occur, and behavior is identical to v0.6.0 (with audio context off).
+- **Transcription is performed by us, on our side.** The audio of the target
+  video is sent **by us** to the transcription service ElevenLabs (USA) to convert
+  it into text. **No audio or captions are sent from the viewer's device** (nor
+  does the extension record or capture any audio).
+- The transcript and its summaries are **stored on our servers (Cloudflare) per
+  video**. This is per-stream (per-video) context and is **not linked to any
+  individual viewer**.
+- **When the feature is ON**, the extension includes the **video ID and your
+  current playback position (in seconds)** in the judgment request (so the server
+  can fetch context up to that position). **When OFF (the default), these are not
+  sent.** Content ahead of your playback position is never referenced.
+- The video ID and playback position included in the judgment request are not
+  logged by the proxy (they are discarded after processing).
+- Summaries of the progression context are generated using **Anthropic Claude**
+  (the same provider as the existing comment judgment).
 
 ### Opt-in Data Collection (v0.3.5 and later)
 

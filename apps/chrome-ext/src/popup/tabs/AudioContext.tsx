@@ -79,7 +79,8 @@ export function AudioContext({ settings, onUpdate }: AudioContextProps) {
         <div className="pr-3">
           <div className="font-medium text-gray-800">音声文脈（実験的）</div>
           <div className="text-xs text-gray-500 mt-0.5">
-            運営が文字起こしを用意した動画で、配信の文脈を判定に反映します。
+            運営が文字起こしを用意したアーカイブ動画でのみ有効。配信の文脈
+            （再生位置までの要約と直近の発言）を判定に反映します。
             再生位置より先の内容は参照されません。
           </div>
         </div>
